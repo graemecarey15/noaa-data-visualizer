@@ -1,0 +1,5 @@
+{
+  "name": "Hurdat2 Visualizer",
+  "description": "A modern, interactive timeline and track visualizer for NOAA HURDAT2 Hurricane data.",
+  "requestFramePermissions": []
+}
