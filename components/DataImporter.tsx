@@ -30,39 +30,62 @@ const BASIN_COLORS: Record<string, string> = {
   'default': 'bg-slate-700 text-slate-300 border-slate-600'
 };
 
+const CAT_FILTERS = [
+  { label: 'TD', min: 0, max: 33, color: 'border-blue-500 text-blue-400 bg-blue-500/10' },
+  { label: 'TS', min: 34, max: 63, color: 'border-emerald-500 text-emerald-400 bg-emerald-500/10' },
+  { label: 'C1', min: 64, max: 82, color: 'border-yellow-200 text-yellow-100 bg-yellow-200/10' },
+  { label: 'C2', min: 83, max: 95, color: 'border-yellow-500 text-yellow-400 bg-yellow-500/10' },
+  { label: 'C3', min: 96, max: 112, color: 'border-orange-500 text-orange-400 bg-orange-500/10' },
+  { label: 'C4', min: 113, max: 136, color: 'border-rose-400 text-rose-300 bg-rose-400/10' },
+  { label: 'C5', min: 137, max: 999, color: 'border-purple-400 text-purple-300 bg-purple-400/10' },
+];
+
 const MONTH_NAMES = [
   'January', 'February', 'March', 'April', 'May', 'June',
   'July', 'August', 'September', 'October', 'November', 'December'
 ];
 
-interface StormFile {
-  id: string; // unique key (year-basin-num)
+// Unified Item Structure for the List View
+interface ImportItem {
+  id: string; // unique key
   year: number;
   basin: string;
-  number: string;
-  filename: string;
+  number: string; // "01", "12"
   displayName: string;
-  lastModified?: Date;
-  monthGroup?: string;
+  groupKey: string; // For section headers (Year or Month)
+  monthIndex: number; // 0-11 for filtering
+  
+  // Source Specific
+  source: 'atcf' | 'hurdat';
+  atcfFilename?: string; // Only for ATCF
+  hurdatObj?: Storm; // Only for Archive (Pre-parsed)
+  
+  // Metadata for Sorting/Filtering
+  lastModified?: Date; // For ATCF Sort
+  maxWind?: number; // Helper for immediate cache population
 }
 
 const DataImporter: React.FC<DataImporterProps> = ({ onImport, onClose }) => {
   const [activeTab, setActiveTab] = useState<ImportTab>('active'); 
   
-  // -- State for Active/Live Tab --
-  const [allFiles, setAllFiles] = useState<StormFile[]>([]);
-  const [isScanning, setIsScanning] = useState<boolean>(false);
-  const [scanError, setScanError] = useState<string | null>(null);
+  // -- Data State --
+  const [availableItems, setAvailableItems] = useState<ImportItem[]>([]);
+  const [isLoading, setIsLoading] = useState<boolean>(false);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
   
-  // Name Cache (Persisted)
+  // Cache (Persisted)
   const [resolvedNames, setResolvedNames] = useState<Record<string, string>>({});
+  const [resolvedIntensities, setResolvedIntensities] = useState<Record<string, number>>({});
   
+  // Archive Source State
+  const [archiveUrl] = useState<string>(DEFAULT_URL);
+
   // Filters
   const [filterSearch, setFilterSearch] = useState('');
-  // Default to 2025 and lock it there for the UI
   const [filterYearStart, setFilterYearStart] = useState<number>(2025);
   const [filterYearEnd, setFilterYearEnd] = useState<number>(2025);
   const [filterBasins, setFilterBasins] = useState<Set<string>>(new Set(['al', 'ep', 'cp']));
+  const [filterCategories, setFilterCategories] = useState<Set<string>>(new Set());
   const [filterMonth, setFilterMonth] = useState<number>(-1); // -1 for All
 
   // Selection
@@ -72,10 +95,7 @@ const DataImporter: React.FC<DataImporterProps> = ({ onImport, onClose }) => {
   const [importing, setImporting] = useState(false);
   const [importProgress, setImportProgress] = useState<{current: number, total: number} | null>(null);
 
-  // -- State for Archive/File Tabs --
-  const [fetchUrl, setFetchUrl] = useState<string>(DEFAULT_URL);
-  const [isFetchingArchive, setIsFetchingArchive] = useState(false);
-  const [archiveError, setArchiveError] = useState<string | null>(null);
+  // File / Paste Tab
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [fileName, setFileName] = useState<string | null>(null);
   const [pasteData, setPasteData] = useState<string>('');
@@ -83,22 +103,40 @@ const DataImporter: React.FC<DataImporterProps> = ({ onImport, onClose }) => {
   // --- 0. LOAD CACHE ---
   useEffect(() => {
     try {
-      const cached = localStorage.getItem('hurdat_names_cache');
-      if (cached) {
-        setResolvedNames(JSON.parse(cached));
-      }
+      const cachedNames = localStorage.getItem('hurdat_names_cache');
+      if (cachedNames) setResolvedNames(JSON.parse(cachedNames));
+
+      const cachedIntensity = localStorage.getItem('hurdat_intensity_cache');
+      if (cachedIntensity) setResolvedIntensities(JSON.parse(cachedIntensity));
     } catch (e) {
-      console.warn("Failed to load name cache", e);
+      console.warn("Failed to load cache", e);
     }
   }, []);
 
-  // --- 1. DIRECTORY SCANNER ---
+  // --- 1. SWITCH TABS RESET ---
   useEffect(() => {
-    const scanDirectory = async () => {
-      if (activeTab !== 'active' || allFiles.length > 0) return;
-      
-      setIsScanning(true);
-      setScanError(null);
+    setAvailableItems([]);
+    setErrorMsg(null);
+    setSelectedIds(new Set());
+    
+    if (activeTab === 'active') {
+       setFilterYearStart(2025);
+       setFilterYearEnd(2025);
+       scanAtcfDirectory();
+    } else if (activeTab === 'archive') {
+       // Reset filters to recent history for archive to avoid showing 1851 immediately
+       setFilterYearStart(2000);
+       setFilterYearEnd(2023);
+       // Auto-load archive immediately
+       loadArchive();
+    }
+  }, [activeTab]);
+
+
+  // --- 2. ATCF SCANNER ---
+  const scanAtcfDirectory = async () => {
+      setIsLoading(true);
+      setErrorMsg(null);
       try {
         const res = await fetch(ATCF_DIR_URL);
         if (!res.ok) throw new Error("Failed to connect to NHC server");
@@ -107,7 +145,7 @@ const DataImporter: React.FC<DataImporterProps> = ({ onImport, onClose }) => {
         // Regex to capture Filename
         const fileRegex = /href="(b([a-z]{2})(\d{2})(\d{4})\.dat)"/g;
         
-        const uniqueMap = new Map<string, StormFile>();
+        const uniqueMap = new Map<string, ImportItem>();
         const matches = [...html.matchAll(fileRegex)];
 
         for (const match of matches) {
@@ -117,7 +155,6 @@ const DataImporter: React.FC<DataImporterProps> = ({ onImport, onClose }) => {
            const year = parseInt(match[4], 10);
            
            // Lookahead for Date
-           // Supports: 20-Jun-2024 (Apache) OR 2024-06-20 (ISO)
            const lookahead = html.substring(match.index! + match[0].length, match.index! + match[0].length + 300);
            const dateMatch = lookahead.match(/(\d{2}-[A-Za-z]{3}-\d{4})|(\d{4}-\d{2}-\d{2})/);
            
@@ -132,15 +169,15 @@ const DataImporter: React.FC<DataImporterProps> = ({ onImport, onClose }) => {
                }
                
                let lastModified: Date | undefined = undefined;
-               // Fallback group if date not found
-               let monthGroup = `${year} ${BASIN_LABELS[basin] || basin.toUpperCase()}`;
+               let groupKey = `${year}`;
+               let monthIndex = 0;
 
                if (dateMatch) {
-                   // dateMatch[0] is the full match (either format)
                    lastModified = new Date(dateMatch[0]);
                    if (!isNaN(lastModified.getTime())) {
                        const monthName = lastModified.toLocaleString('default', { month: 'long' });
-                       monthGroup = `${monthName} ${year}`;
+                       groupKey = `${monthName} ${year}`;
+                       monthIndex = lastModified.getMonth();
                    }
                }
 
@@ -149,76 +186,151 @@ const DataImporter: React.FC<DataImporterProps> = ({ onImport, onClose }) => {
                  year,
                  basin,
                  number: num,
-                 filename,
                  displayName: name,
                  lastModified,
-                 monthGroup
+                 groupKey,
+                 monthIndex,
+                 source: 'atcf',
+                 atcfFilename: filename
                });
            }
         }
 
         const files = Array.from(uniqueMap.values());
 
-        // Sort: Year Desc, then by Date Desc (Newest Month First), then Number Desc
+        // Sort: Year Desc, then by Date Desc
         files.sort((a,b) => {
            if (b.year !== a.year) return b.year - a.year;
            if (a.lastModified && b.lastModified) return b.lastModified.getTime() - a.lastModified.getTime();
-           // If no date, try to infer relative order by number (usually higher number = later)
            return parseInt(b.number) - parseInt(a.number);
         });
 
-        setAllFiles(files);
-        
+        setAvailableItems(files);
       } catch (e: any) {
         console.error("Directory scan failed", e);
-        setScanError(e.message || "Failed to scan directory");
+        setErrorMsg(e.message || "Failed to scan directory");
       } finally {
-        setIsScanning(false);
+        setIsLoading(false);
       }
-    };
+  };
 
-    scanDirectory();
-  }, [activeTab, resolvedNames]); 
+  // --- 3. ARCHIVE LOADER ---
+  const loadArchive = async () => {
+      setIsLoading(true);
+      setErrorMsg(null);
+      try {
+          const url = archiveUrl.includes('corsproxy.io') ? archiveUrl : `https://corsproxy.io/?${archiveUrl}`;
+          const res = await fetch(url);
+          if (!res.ok) throw new Error("Failed to fetch archive file");
+          const text = await res.text();
+          const storms = parseHurdat2(text);
+          
+          if (storms.length === 0) throw new Error("No storms found in file");
+
+          // Convert parsed storms to ImportItems
+          const items: ImportItem[] = storms.map(s => {
+              // Extract basin from ID (AL092011 -> AL)
+              const basin = s.id.substring(0, 2).toLowerCase();
+              const num = s.id.substring(2, 4);
+              
+              // Calculate Metadata
+              const startDate = s.track.length > 0 ? new Date(s.track[0].datetime) : new Date(s.year, 0, 1);
+              const monthIndex = startDate.getMonth();
+              const monthName = MONTH_NAMES[monthIndex];
+              const groupKey = `${monthName} ${s.year}`;
+              
+              // Pre-fill cache with parsed data so filtering works instantly
+              const maxWind = Math.max(...s.track.map(t => t.maxWind));
+              
+              return {
+                  id: s.id,
+                  year: s.year,
+                  basin: basin,
+                  number: num,
+                  displayName: s.name,
+                  groupKey,
+                  monthIndex,
+                  source: 'hurdat',
+                  hurdatObj: s,
+                  maxWind // temporary helper
+              };
+          });
+          
+          // Populate Cache immediately for these items
+          const newNames: Record<string, string> = {};
+          const newIntensities: Record<string, number> = {};
+          
+          items.forEach(item => {
+              newNames[item.id] = item.displayName;
+              if (item.maxWind !== undefined) newIntensities[item.id] = item.maxWind;
+          });
+          
+          setResolvedNames(prev => ({...prev, ...newNames}));
+          setResolvedIntensities(prev => ({...prev, ...newIntensities}));
+          
+          // Sort items: Newest first
+          items.sort((a,b) => b.year - a.year || parseInt(b.number) - parseInt(a.number));
+
+          setAvailableItems(items);
+
+      } catch(e: any) {
+          setErrorMsg(e.message);
+      } finally {
+          setIsLoading(false);
+      }
+  };
 
 
-  // --- 1b. BACKGROUND NAME RESOLVER ---
+  // --- 4. BACKGROUND RESOLVER (ATCF ONLY) ---
   useEffect(() => {
-      if (allFiles.length === 0) return;
-      const resolveNames = async () => {
-          const pending = allFiles.filter(f => 
-              f.displayName.startsWith('Storm ') && !resolvedNames[f.id]
-          );
+      if (activeTab !== 'active' || availableItems.length === 0) return;
+      
+      const resolveMetadata = async () => {
+          const pending = availableItems.filter(f => {
+              const needsName = f.displayName.startsWith('Storm ') && !resolvedNames[f.id];
+              const needsIntensity = resolvedIntensities[f.id] === undefined;
+              return needsName || needsIntensity;
+          });
+
           if (pending.length === 0) return;
+          
+          // Process a small batch
           const BATCH_SIZE = 5;
           let newResolutions: Record<string, string> = {};
-          for (let i = 0; i < pending.length; i += BATCH_SIZE) {
-              const batch = pending.slice(i, i + BATCH_SIZE);
-              await Promise.all(batch.map(async (file) => {
-                  try {
-                      const url = `https://corsproxy.io/?${ATCF_BASE_URL}${file.filename}`;
-                      const res = await fetch(url);
-                      if (res.ok) {
-                          const text = await res.text();
-                          const lines = text.split('\n');
-                          let bestName = '';
-                          for (const line of lines) {
-                              const parts = line.split(',').map(p => p.trim());
-                              if (parts.length < 10) continue;
-                              const nameCands = [parts[27], parts[23]].filter(n => n && isNaN(parseInt(n)));
-                              for (const cand of nameCands) {
-                                  if (!cand) continue;
-                                  const up = cand.toUpperCase();
-                                  if (['INVEST', 'GENESIS', 'UNNAMED', 'SUBTROP', 'LOW', 'TC', 'TWO', 'NONAME', 'BEST', 'ONE', 'TWO', 'THREE', 'FOUR', 'FIVE', 'SIX', 'SEVEN', 'EIGHT', 'NINE', 'TEN'].some(bad => up.startsWith(bad))) {
-                                      continue;
-                                  }
-                                  bestName = cand;
-                              }
+          let newIntensities: Record<string, number> = {};
+
+          for (let i = 0; i < Math.min(pending.length, BATCH_SIZE); i++) {
+              const item = pending[i];
+              try {
+                  const url = `https://corsproxy.io/?${ATCF_BASE_URL}${item.atcfFilename}`;
+                  const res = await fetch(url);
+                  if (res.ok) {
+                      const text = await res.text();
+                      const lines = text.split('\n');
+                      let bestName = '';
+                      let maxWind = 0;
+
+                      for (const line of lines) {
+                          const parts = line.split(',').map(p => p.trim());
+                          if (parts.length < 10) continue;
+                          const wind = parseInt(parts[8], 10);
+                          if (!isNaN(wind) && wind > maxWind) maxWind = wind;
+
+                          const nameCands = [parts[27], parts[23]].filter(n => n && isNaN(parseInt(n)));
+                          for (const cand of nameCands) {
+                              if (!cand) continue;
+                              const up = cand.toUpperCase();
+                              if (['INVEST', 'GENESIS', 'UNNAMED', 'SUBTROP', 'LOW', 'TC', 'TWO', 'NONAME', 'BEST', 'ONE', 'NINE'].some(bad => up.startsWith(bad))) continue;
+                              bestName = cand;
                           }
-                          if (bestName) newResolutions[file.id] = bestName;
                       }
-                  } catch (e) {}
-              }));
+                      
+                      if (bestName) newResolutions[item.id] = bestName;
+                      newIntensities[item.id] = maxWind;
+                  }
+              } catch (e) {}
           }
+
           if (Object.keys(newResolutions).length > 0) {
             setResolvedNames(prev => {
               const updated = { ...prev, ...newResolutions };
@@ -226,71 +338,19 @@ const DataImporter: React.FC<DataImporterProps> = ({ onImport, onClose }) => {
               return updated;
             });
           }
+          if (Object.keys(newIntensities).length > 0) {
+            setResolvedIntensities(prev => {
+                const updated = { ...prev, ...newIntensities };
+                localStorage.setItem('hurdat_intensity_cache', JSON.stringify(updated));
+                return updated;
+            });
+          }
       };
-      const timer = setTimeout(resolveNames, 500);
+      
+      const timer = setTimeout(resolveMetadata, 500);
       return () => clearTimeout(timer);
-  }, [allFiles]); 
+  }, [availableItems, resolvedNames, resolvedIntensities, activeTab]); 
 
-
-  // --- 2. FILTER LOGIC ---
-  const filteredFiles = useMemo(() => {
-    return allFiles.filter(f => {
-       if (f.year < filterYearStart || f.year > filterYearEnd) return false;
-       if (!filterBasins.has(f.basin)) return false;
-       if (filterMonth !== -1) {
-          if (!f.lastModified) return false;
-          if (f.lastModified.getMonth() !== filterMonth) return false;
-       }
-
-       const name = resolvedNames[f.id] || f.displayName;
-       if (filterSearch) {
-          const search = filterSearch.toLowerCase();
-          return (
-             name.toLowerCase().includes(search) ||
-             f.id.includes(search) ||
-             f.year.toString().includes(search)
-          );
-       }
-       return true;
-    });
-  }, [allFiles, filterYearStart, filterYearEnd, filterBasins, filterSearch, resolvedNames, filterMonth]);
-
-  // Compute counts per month based on current Year/Basin/Search filters
-  const monthCounts = useMemo(() => {
-    const counts = new Array(12).fill(0);
-    allFiles.forEach(f => {
-       // Apply same logic as filters EXCEPT month
-       if (f.year < filterYearStart || f.year > filterYearEnd) return;
-       if (!filterBasins.has(f.basin)) return;
-       const name = resolvedNames[f.id] || f.displayName;
-       if (filterSearch) {
-          const search = filterSearch.toLowerCase();
-          const matches = name.toLowerCase().includes(search) ||
-                          f.id.includes(search) ||
-                          f.year.toString().includes(search);
-          if (!matches) return;
-       }
-
-       // Increment count for this file's month
-       if (f.lastModified) {
-         counts[f.lastModified.getMonth()]++;
-       }
-    });
-    return counts;
-  }, [allFiles, filterYearStart, filterYearEnd, filterBasins, filterSearch, resolvedNames]);
-
-
-  // Group filtered files by Month
-  const groupedFiles = useMemo(() => {
-      const groups: Record<string, StormFile[]> = {};
-      filteredFiles.forEach(f => {
-          // Key is Month Group. If duplicated months exist across years, the year is already part of the string.
-          const key = f.monthGroup || `${f.year} Season`;
-          if (!groups[key]) groups[key] = [];
-          groups[key].push(f);
-      });
-      return groups;
-  }, [filteredFiles]);
 
   const toggleBasin = (basin: string) => {
     const next = new Set(filterBasins);
@@ -299,7 +359,114 @@ const DataImporter: React.FC<DataImporterProps> = ({ onImport, onClose }) => {
     setFilterBasins(next);
   };
 
-  // --- 3. SELECTION LOGIC ---
+  const toggleCategory = (label: string) => {
+    const next = new Set(filterCategories);
+    if (next.has(label)) next.delete(label);
+    else next.add(label);
+    setFilterCategories(next);
+  };
+
+
+  // --- 5. UNIFIED FILTER LOGIC ---
+  const filteredItems = useMemo(() => {
+    return availableItems.filter(item => {
+       if (item.year < filterYearStart || item.year > filterYearEnd) return false;
+       if (!filterBasins.has(item.basin)) return false;
+       if (filterMonth !== -1) {
+          if (item.monthIndex !== filterMonth) return false;
+       }
+
+       // Category Filter
+       if (filterCategories.size > 0) {
+           const wind = resolvedIntensities[item.id] || 0;
+           let matchesCat = false;
+           for (const cat of CAT_FILTERS) {
+               if (filterCategories.has(cat.label)) {
+                   if (wind >= cat.min && wind <= cat.max) {
+                       matchesCat = true;
+                       break;
+                   }
+               }
+           }
+           // Archive items have intensity immediately. ATCF items might be loading.
+           // If Archive: Strict. If ATCF and unknown: Strict (Hide).
+           if (resolvedIntensities[item.id] === undefined && filterCategories.size > 0) return false;
+           if (!matchesCat) return false;
+       }
+
+       const name = resolvedNames[item.id] || item.displayName;
+       if (filterSearch) {
+          const search = filterSearch.toLowerCase();
+          return (
+             name.toLowerCase().includes(search) ||
+             item.id.toLowerCase().includes(search) ||
+             item.year.toString().includes(search)
+          );
+       }
+       return true;
+    });
+  }, [availableItems, filterYearStart, filterYearEnd, filterBasins, filterCategories, filterSearch, resolvedNames, resolvedIntensities, filterMonth]);
+
+  // Counts for UI
+  const monthCounts = useMemo(() => {
+    const counts = new Array(12).fill(0);
+    // Reuse filter logic but ignore month filter
+    availableItems.forEach(item => {
+        if (item.year < filterYearStart || item.year > filterYearEnd) return;
+        if (!filterBasins.has(item.basin)) return;
+        if (filterSearch) {
+             const name = resolvedNames[item.id] || item.displayName;
+             const search = filterSearch.toLowerCase();
+             if (!(name.toLowerCase().includes(search) || item.id.includes(search))) return;
+        }
+        if (filterCategories.size > 0) {
+           const wind = resolvedIntensities[item.id] || 0;
+           let matchesCat = false;
+           for (const cat of CAT_FILTERS) {
+               if (filterCategories.has(cat.label) && wind >= cat.min && wind <= cat.max) matchesCat = true;
+           }
+           if (!matchesCat) return;
+        }
+        counts[item.monthIndex]++;
+    });
+    return counts;
+  }, [availableItems, filterYearStart, filterYearEnd, filterBasins, filterSearch, filterCategories, resolvedNames, resolvedIntensities]);
+
+  const categoryCounts = useMemo(() => {
+     const counts: Record<string, number> = {};
+     CAT_FILTERS.forEach(c => counts[c.label] = 0);
+     availableItems.forEach(item => {
+        if (item.year < filterYearStart || item.year > filterYearEnd) return;
+        if (!filterBasins.has(item.basin)) return;
+        if (filterMonth !== -1 && item.monthIndex !== filterMonth) return;
+        if (filterSearch) {
+             const name = resolvedNames[item.id] || item.displayName;
+             const search = filterSearch.toLowerCase();
+             if (!(name.toLowerCase().includes(search) || item.id.includes(search))) return;
+        }
+        const wind = resolvedIntensities[item.id];
+        if (wind !== undefined) {
+             const cat = CAT_FILTERS.find(c => wind >= c.min && wind <= c.max);
+             if (cat) counts[cat.label]++;
+        }
+     });
+     return counts;
+  }, [availableItems, filterYearStart, filterYearEnd, filterBasins, filterSearch, filterMonth, resolvedNames, resolvedIntensities]);
+
+
+  // Group filtered items
+  const groupedItems = useMemo(() => {
+      const groups: Record<string, ImportItem[]> = {};
+      filteredItems.forEach(item => {
+          const key = item.groupKey;
+          if (!groups[key]) groups[key] = [];
+          groups[key].push(item);
+      });
+      return groups;
+  }, [filteredItems]);
+
+
+  // --- 6. SELECTION ---
   const toggleSelection = (id: string) => {
     const next = new Set(selectedIds);
     if (next.has(id)) next.delete(id);
@@ -308,46 +475,56 @@ const DataImporter: React.FC<DataImporterProps> = ({ onImport, onClose }) => {
   };
 
   const toggleSelectAll = () => {
-     const allSelected = filteredFiles.every(f => selectedIds.has(f.id));
+     const allSelected = filteredItems.every(f => selectedIds.has(f.id));
      const next = new Set(selectedIds);
      if (allSelected) {
-        filteredFiles.forEach(f => next.delete(f.id));
+        filteredItems.forEach(f => next.delete(f.id));
      } else {
-        filteredFiles.forEach(f => next.add(f.id));
+        filteredItems.forEach(f => next.add(f.id));
      }
      setSelectedIds(next);
   };
 
-  // --- 4. IMPORT ACTIONS ---
-  const handleImport = async (filesToImport: StormFile[]) => {
-    if (filesToImport.length === 0) return;
+  // --- 7. IMPORT EXECUTION ---
+  const handleImport = async (itemsToImport: ImportItem[]) => {
+    if (itemsToImport.length === 0) return;
 
     setImporting(true);
-    setImportProgress({ current: 0, total: filesToImport.length });
+    setImportProgress({ current: 0, total: itemsToImport.length });
     
     const results: Storm[] = [];
     let completed = 0;
-    const fetchOne = async (file: StormFile) => {
-       try {
-          const url = `https://corsproxy.io/?${ATCF_BASE_URL}${file.filename}`;
-          const res = await fetch(url);
-          if (res.ok) {
-             const text = await res.text();
-             return parseHurdat2(text);
-          }
-       } catch (e) { console.error(e); }
-       return [];
-    };
 
-    const chunkSize = 5;
-    for (let i = 0; i < filesToImport.length; i += chunkSize) {
-        const chunk = filesToImport.slice(i, i + chunkSize);
-        await Promise.all(chunk.map(async (file) => {
-           const storms = await fetchOne(file);
-           results.push(...storms);
-           completed++;
-           setImportProgress({ current: completed, total: filesToImport.length });
-        }));
+    // Separate logic by source
+    const atcfItems = itemsToImport.filter(i => i.source === 'atcf');
+    const hurdatItems = itemsToImport.filter(i => i.source === 'hurdat');
+
+    // 1. Process Archive (Instant)
+    hurdatItems.forEach(item => {
+        if (item.hurdatObj) results.push(item.hurdatObj);
+        completed++;
+    });
+    setImportProgress({ current: completed, total: itemsToImport.length });
+
+    // 2. Process ATCF (Fetch)
+    if (atcfItems.length > 0) {
+        const chunkSize = 5;
+        for (let i = 0; i < atcfItems.length; i += chunkSize) {
+            const chunk = atcfItems.slice(i, i + chunkSize);
+            await Promise.all(chunk.map(async (item) => {
+               try {
+                  const url = `https://corsproxy.io/?${ATCF_BASE_URL}${item.atcfFilename}`;
+                  const res = await fetch(url);
+                  if (res.ok) {
+                     const text = await res.text();
+                     const parsed = parseHurdat2(text);
+                     results.push(...parsed);
+                  }
+               } catch (e) { console.error(e); }
+               completed++;
+               setImportProgress({ current: completed, total: itemsToImport.length });
+            }));
+        }
     }
 
     setImporting(false);
@@ -361,23 +538,8 @@ const DataImporter: React.FC<DataImporterProps> = ({ onImport, onClose }) => {
     }
   };
 
-  // --- 5. ARCHIVE HANDLERS ---
-  const handleArchiveFetch = async () => {
-    setIsFetchingArchive(true);
-    setArchiveError(null);
-    try {
-      const url = fetchUrl.includes('corsproxy.io') ? fetchUrl : `https://corsproxy.io/?${fetchUrl}`;
-      const res = await fetch(url);
-      if (!res.ok) throw new Error("Failed to fetch archive");
-      const text = await res.text();
-      const parsed = parseHurdat2(text);
-      if (parsed.length === 0) throw new Error("No valid data found");
-      onImport(parsed);
-      onClose();
-    } catch (e: any) { setArchiveError(e.message); } 
-    finally { setIsFetchingArchive(false); }
-  };
 
+  // --- 8. FILE UPLOAD ---
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
      const file = e.target.files?.[0];
      if (!file) return;
@@ -439,16 +601,33 @@ const DataImporter: React.FC<DataImporterProps> = ({ onImport, onClose }) => {
         </button>
       </div>
 
-      {/* --- CONTENT AREA --- */}
+      {/* --- CONTENT --- */}
       <div className="flex-1 overflow-hidden relative flex flex-col">
         
-        {/* === TAB 1: LIVE / ATCF LIST === */}
-        {activeTab === 'active' && (
+        {/* === FILE TAB === */}
+        {activeTab === 'file' ? (
+           <div className="p-6 h-full overflow-y-auto custom-scrollbar">
+              <div className="max-w-2xl mx-auto space-y-8">
+                 <div className="border-2 border-dashed border-slate-700 rounded-xl p-8 flex flex-col items-center justify-center bg-slate-950/30 hover:bg-slate-900/50 transition-colors">
+                    <p className="text-slate-300 font-medium mb-2">{fileName || "Upload Local File"}</p>
+                    <input type="file" ref={fileInputRef} onChange={handleFileUpload} accept=".txt,.csv,.dat" className="hidden" />
+                    <button onClick={() => fileInputRef.current?.click()} className="bg-slate-700 text-white px-4 py-2 rounded">Choose File</button>
+                 </div>
+                 <div>
+                    <h3 className="text-slate-400 text-xs font-bold uppercase mb-2">Paste Raw Data</h3>
+                    <textarea value={pasteData} onChange={e => setPasteData(e.target.value)} className="w-full h-40 bg-slate-950 text-slate-300 p-4 rounded border border-slate-700 font-mono text-xs" />
+                    <button onClick={handlePaste} className="w-full mt-2 bg-slate-800 text-cyan-400 px-4 py-3 rounded font-bold">Parse Text</button>
+                 </div>
+              </div>
+           </div>
+        ) : (
+           /* === UNIFIED LIST VIEW (ATCF & ARCHIVE) === */
            <div className="flex flex-col h-full">
-              
+
               {/* Filter Bar */}
-              <div className="p-4 bg-slate-800/50 border-b border-slate-700 flex flex-col md:flex-row gap-4 items-start md:items-center justify-between shrink-0">
+              <div className={`p-4 bg-slate-800/50 border-b border-slate-700 flex flex-col md:flex-row gap-4 items-start md:items-center justify-between shrink-0 transition-opacity`}>
                  <div className="flex flex-col gap-3 w-full">
+                    {/* Top Row: Search + Year */}
                     <div className="flex flex-col md:flex-row gap-3">
                         <div className="relative flex-1">
                            <svg className="absolute left-3 top-2.5 h-4 w-4 text-slate-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -456,14 +635,36 @@ const DataImporter: React.FC<DataImporterProps> = ({ onImport, onClose }) => {
                            </svg>
                            <input 
                               type="text" 
-                              placeholder="Search (e.g. Milton, AL09)..." 
+                              placeholder="Search (e.g. Katrina, 2005)..." 
                               value={filterSearch}
                               onChange={e => setFilterSearch(e.target.value)}
-                              className="w-full bg-slate-950 border border-slate-700 rounded-lg pl-9 pr-3 py-2 text-sm text-slate-200 outline-none focus:border-emerald-500"
+                              className="w-full bg-slate-950 border border-slate-700 rounded-lg pl-9 pr-3 py-2 text-sm text-slate-200 outline-none focus:border-cyan-500"
                            />
                         </div>
+                        
+                        {/* Year Range (Only for Archive) */}
+                        {activeTab === 'archive' && (
+                          <div className="flex items-center gap-2 bg-slate-950 border border-slate-700 rounded-lg px-3 py-2">
+                               <span className="text-xs text-slate-500 font-bold uppercase">Year</span>
+                               <input 
+                                 type="number" 
+                                 value={filterYearStart}
+                                 onChange={e => setFilterYearStart(parseInt(e.target.value))}
+                                 className="bg-transparent w-16 text-center text-sm outline-none text-slate-300"
+                               />
+                               <span className="text-slate-600">-</span>
+                               <input 
+                                 type="number" 
+                                 value={filterYearEnd}
+                                 onChange={e => setFilterYearEnd(parseInt(e.target.value))}
+                                 className="bg-transparent w-16 text-center text-sm outline-none text-slate-300"
+                               />
+                          </div>
+                        )}
                     </div>
-                    <div className="flex flex-col gap-2">
+                    
+                    <div className="flex flex-col gap-3">
+                       {/* Basin Filters + Month */}
                        <div className="flex flex-wrap gap-2">
                           {Object.entries(BASIN_LABELS).map(([code, label]) => {
                              const isActive = filterBasins.has(code);
@@ -481,43 +682,61 @@ const DataImporter: React.FC<DataImporterProps> = ({ onImport, onClose }) => {
                                 </button>
                              );
                           })}
+                          
+                           <select
+                             value={filterMonth}
+                             onChange={(e) => setFilterMonth(parseInt(e.target.value, 10))}
+                             className="bg-slate-900 text-slate-300 text-xs rounded border border-slate-700 px-2 py-1 outline-none w-full sm:w-auto"
+                           >
+                             <option value={-1}>All ({availableItems.length > 0 ? availableItems.length : 0})</option>
+                             {MONTH_NAMES.map((m, i) => {
+                                 const count = monthCounts[i];
+                                 if (count === 0) return null;
+                                 return (
+                                   <option key={m} value={i}>
+                                      {m} ({count})
+                                   </option>
+                                 );
+                             })}
+                           </select>
                        </div>
-                       
-                       {/* Month Picker with Counts */}
-                       <select
-                         value={filterMonth}
-                         onChange={(e) => setFilterMonth(parseInt(e.target.value, 10))}
-                         className="bg-slate-900 text-slate-300 text-xs rounded border border-slate-700 px-2 py-1 outline-none w-full sm:w-auto"
-                       >
-                         <option value={-1}>All Months ({allFiles.filter(f => !filterBasins.has(f.basin) ? false : (filterSearch ? (resolvedNames[f.id] || f.displayName).toLowerCase().includes(filterSearch.toLowerCase()) : true)).length})</option>
-                         {MONTH_NAMES.map((m, i) => {
-                             const count = monthCounts[i];
-                             if (count === 0) return null; // Hide months without storms
+
+                       {/* Category Filters */}
+                       <div className="flex flex-wrap gap-2">
+                          {CAT_FILTERS.map((cat) => {
+                             const isActive = filterCategories.has(cat.label);
+                             const count = categoryCounts[cat.label] || 0;
+                             
                              return (
-                               <option key={m} value={i}>
-                                  {m} ({count})
-                               </option>
+                                <button
+                                   key={cat.label}
+                                   onClick={() => toggleCategory(cat.label)}
+                                   className={`px-2.5 py-1 text-[10px] font-bold rounded border transition-all ${
+                                      isActive 
+                                         ? cat.color
+                                         : 'bg-slate-900 border-slate-700 text-slate-500 hover:border-slate-500'
+                                   } ${count === 0 ? 'opacity-40' : 'opacity-100'}`}
+                                >
+                                   {cat.label} ({count})
+                                </button>
                              );
-                         })}
-                       </select>
+                          })}
+                       </div>
                     </div>
                  </div>
               </div>
 
               {/* Storm List */}
-              <div className="flex-1 overflow-y-auto custom-scrollbar relative bg-slate-950">
-                 {isScanning ? (
-                    <div className="absolute inset-0 flex items-center justify-center flex-col gap-3 text-emerald-400">
-                       <svg className="animate-spin h-8 w-8" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                       </svg>
-                       <span className="text-sm font-mono">Indexing NHC Server...</span>
+              <div className={`flex-1 overflow-y-auto custom-scrollbar relative bg-slate-950`}>
+                 {isLoading ? (
+                    <div className="absolute inset-0 flex items-center justify-center flex-col gap-3 text-cyan-400 z-10 bg-slate-950/80">
+                       <svg className="animate-spin h-8 w-8" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
+                       <span className="text-sm font-mono">{activeTab === 'archive' ? 'Indexing 170 years of data...' : 'Scanning NHC directory...'}</span>
                     </div>
-                 ) : filteredFiles.length === 0 ? (
+                 ) : filteredItems.length === 0 ? (
                     <div className="flex flex-col items-center justify-center h-full text-slate-500">
                        <p>No storms found matching filters.</p>
-                       {scanError && <p className="text-rose-400 text-xs mt-2">{scanError}</p>}
+                       {errorMsg && <p className="text-rose-400 text-xs mt-2">{errorMsg}</p>}
                     </div>
                  ) : (
                     <div className="w-full text-left text-sm">
@@ -526,7 +745,7 @@ const DataImporter: React.FC<DataImporterProps> = ({ onImport, onClose }) => {
                              <div className="px-4 py-3 w-10">
                                 <input 
                                    type="checkbox" 
-                                   checked={filteredFiles.length > 0 && filteredFiles.every(f => selectedIds.has(f.id))}
+                                   checked={filteredItems.length > 0 && filteredItems.every(f => selectedIds.has(f.id))}
                                    onChange={toggleSelectAll}
                                    className="rounded border-slate-600 bg-slate-800 accent-emerald-500"
                                 />
@@ -534,30 +753,40 @@ const DataImporter: React.FC<DataImporterProps> = ({ onImport, onClose }) => {
                              <div className="px-4 py-3 flex-1">Storm Name</div>
                              <div className="px-4 py-3 w-24 hidden sm:block">ID</div>
                              <div className="px-4 py-3 w-20 hidden sm:block">Year</div>
-                             <div className="px-4 py-3 w-32">Basin</div>
+                             <div className="px-4 py-3 w-24">Basin</div>
+                             <div className="px-4 py-3 w-20 text-right">Wind</div>
                        </div>
                        
                        {/* Groups */}
-                       {Object.keys(groupedFiles).map(group => (
+                       {Object.keys(groupedItems).map(group => (
                           <div key={group}>
                              <div className="px-4 py-2 bg-slate-800/90 text-cyan-400 text-xs font-bold uppercase tracking-widest border-y border-slate-700/80 backdrop-blur sticky top-10 z-0 shadow-sm">
                                 {group}
                              </div>
                              <div className="divide-y divide-slate-800/50">
-                                {groupedFiles[group].map(file => {
-                                    const isSelected = selectedIds.has(file.id);
-                                    const resolvedName = resolvedNames[file.id] || file.displayName;
+                                {groupedItems[group].map(item => {
+                                    const isSelected = selectedIds.has(item.id);
+                                    const resolvedName = resolvedNames[item.id] || item.displayName;
+                                    const wind = resolvedIntensities[item.id];
+                                    
+                                    // Determine Category Tag
+                                    let catTag = null;
+                                    if (wind !== undefined) {
+                                       const cat = CAT_FILTERS.find(c => wind >= c.min && wind <= c.max);
+                                       if (cat) catTag = cat;
+                                    }
+
                                     return (
                                         <div 
-                                          key={file.id} 
+                                          key={item.id} 
                                           className={`flex items-center hover:bg-slate-800/30 transition-colors cursor-pointer ${isSelected ? 'bg-emerald-900/10' : ''}`}
-                                          onClick={() => toggleSelection(file.id)}
+                                          onClick={() => toggleSelection(item.id)}
                                         >
                                            <div className="px-4 py-2.5 w-10 shrink-0" onClick={e => e.stopPropagation()}>
                                               <input 
                                                  type="checkbox" 
                                                  checked={isSelected}
-                                                 onChange={() => toggleSelection(file.id)}
+                                                 onChange={() => toggleSelection(item.id)}
                                                  className="rounded border-slate-600 bg-slate-800 accent-emerald-500"
                                               />
                                            </div>
@@ -565,15 +794,24 @@ const DataImporter: React.FC<DataImporterProps> = ({ onImport, onClose }) => {
                                               {resolvedName}
                                            </div>
                                            <div className="px-4 py-2.5 w-24 font-mono text-slate-400 text-xs uppercase hidden sm:block">
-                                              {file.basin}{file.number}
+                                              {item.basin}{item.number}
                                            </div>
                                            <div className="px-4 py-2.5 w-20 text-slate-300 hidden sm:block">
-                                              {file.year}
+                                              {item.year}
                                            </div>
-                                           <div className="px-4 py-2.5 w-32">
-                                              <span className={`text-[10px] uppercase font-bold px-1.5 py-0.5 rounded border ${BASIN_COLORS[file.basin] || BASIN_COLORS.default}`}>
-                                                 {BASIN_LABELS[file.basin] || file.basin}
+                                           <div className="px-4 py-2.5 w-24">
+                                              <span className={`text-[10px] uppercase font-bold px-1.5 py-0.5 rounded border ${BASIN_COLORS[item.basin] || BASIN_COLORS.default}`}>
+                                                 {BASIN_LABELS[item.basin] || item.basin}
                                               </span>
+                                           </div>
+                                           <div className="px-4 py-2.5 w-20 text-right">
+                                              {catTag ? (
+                                                  <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded border ${catTag.color}`}>
+                                                      {catTag.label}
+                                                  </span>
+                                              ) : (
+                                                  <span className="text-xs text-slate-600">-</span>
+                                              )}
                                            </div>
                                         </div>
                                     );
@@ -588,11 +826,11 @@ const DataImporter: React.FC<DataImporterProps> = ({ onImport, onClose }) => {
               {/* Action Bar */}
               <div className="p-4 bg-slate-900 border-t border-slate-700 flex flex-col sm:flex-row justify-between items-center gap-4 shrink-0 shadow-[0_-5px_15px_rgba(0,0,0,0.3)] z-20">
                  <div className="text-slate-400 text-xs">
-                    {filteredFiles.length} matches • {selectedIds.size} selected
+                    {filteredItems.length} matches • {selectedIds.size} selected
                  </div>
                  <div className="flex gap-3 w-full sm:w-auto">
                     <button
-                       onClick={() => handleImport(filteredFiles.filter(f => selectedIds.has(f.id)))}
+                       onClick={() => handleImport(filteredItems.filter(f => selectedIds.has(f.id)))}
                        disabled={selectedIds.size === 0 || importing}
                        className="flex-1 sm:flex-none bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 disabled:cursor-not-allowed text-white px-6 py-2.5 rounded-lg font-bold shadow-lg shadow-emerald-900/20 transition-all flex items-center justify-center gap-2"
                     >
@@ -603,57 +841,12 @@ const DataImporter: React.FC<DataImporterProps> = ({ onImport, onClose }) => {
                        )}
                     </button>
                     <button
-                       onClick={() => handleImport(filteredFiles)}
-                       disabled={filteredFiles.length === 0 || importing}
+                       onClick={() => handleImport(filteredItems)}
+                       disabled={filteredItems.length === 0 || importing}
                        className="flex-1 sm:flex-none bg-slate-800 hover:bg-slate-700 disabled:opacity-50 border border-slate-600 text-slate-200 px-4 py-2.5 rounded-lg font-medium transition-all"
                     >
-                       Import All Matching ({filteredFiles.length})
+                       Import All Matching ({filteredItems.length})
                     </button>
-                 </div>
-              </div>
-           </div>
-        )}
-
-        {/* === TAB 2: ARCHIVE === */}
-        {activeTab === 'archive' && (
-           <div className="p-6 flex flex-col items-center justify-center h-full">
-              <div className="max-w-xl w-full bg-slate-950 p-6 rounded-xl border border-slate-700">
-                 <h3 className="text-lg font-bold text-cyan-400 mb-2">HURDAT2 Archive</h3>
-                 <p className="text-slate-400 text-sm mb-6">Load the complete historical record (1851-2023) from the NOAA HRD server. This is a large file (~10MB).</p>
-                 
-                 <div className="flex gap-2">
-                    <input 
-                       type="text" 
-                       value={fetchUrl} 
-                       onChange={e => setFetchUrl(e.target.value)}
-                       className="flex-1 bg-slate-900 border border-slate-700 rounded px-3 py-2 text-sm text-slate-200"
-                    />
-                    <button 
-                       onClick={handleArchiveFetch}
-                       disabled={isFetchingArchive}
-                       className="bg-cyan-600 hover:bg-cyan-500 text-white px-4 py-2 rounded font-bold"
-                    >
-                       {isFetchingArchive ? 'Loading...' : 'Fetch'}
-                    </button>
-                 </div>
-                 {archiveError && <p className="text-rose-400 text-sm mt-3">{archiveError}</p>}
-              </div>
-           </div>
-        )}
-
-        {/* === TAB 3: FILE === */}
-        {activeTab === 'file' && (
-           <div className="p-6 h-full overflow-y-auto custom-scrollbar">
-              <div className="max-w-2xl mx-auto space-y-8">
-                 <div className="border-2 border-dashed border-slate-700 rounded-xl p-8 flex flex-col items-center justify-center bg-slate-950/30 hover:bg-slate-900/50 transition-colors">
-                    <p className="text-slate-300 font-medium mb-2">{fileName || "Upload Local File"}</p>
-                    <input type="file" ref={fileInputRef} onChange={handleFileUpload} accept=".txt,.csv,.dat" className="hidden" />
-                    <button onClick={() => fileInputRef.current?.click()} className="bg-slate-700 text-white px-4 py-2 rounded">Choose File</button>
-                 </div>
-                 <div>
-                    <h3 className="text-slate-400 text-xs font-bold uppercase mb-2">Paste Raw Data</h3>
-                    <textarea value={pasteData} onChange={e => setPasteData(e.target.value)} className="w-full h-40 bg-slate-950 text-slate-300 p-4 rounded border border-slate-700 font-mono text-xs" />
-                    <button onClick={handlePaste} className="w-full mt-2 bg-slate-800 text-cyan-400 px-4 py-3 rounded font-bold">Parse Text</button>
                  </div>
               </div>
            </div>
