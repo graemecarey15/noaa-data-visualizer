@@ -1,5 +1,4 @@
 
-
 import { Storm, StormDataPoint, WindRadii } from '../types';
 
 const parseCoordinate = (coord: string): number => {
@@ -137,18 +136,9 @@ const parseAtcf = (lines: string[]): Storm[] => {
         // Standard ATCF Format Expected
         // 0:Basin, 1:CY, 2:Date, 3:Tech, 4:Tau, 5:Lat, 6:Lon, 7:Wind, 8:Pres, 9:Status, 10:RadCode...
         
-        // Note: The previous "Custom Preloaded Format" branch has been removed.
-        // All preloaded data is now in HURDAT2 format and handled by parseStandardHurdat.
-        
         const rawDate = parts[2]; 
         if (!rawDate || rawDate.length !== 10) continue;
 
-        // Mapping based on typical B-Deck columns from NHC FTP
-        // Some files vary slightly, but Lat/Lon usually 6/7 or 5/6 depending on if there's a filler
-        // Adjusting index based on standard spec:
-        // Basin, Cy, YYYYMMDDHH, Tech, Tau, Lat, Lon, Vmax, MSLP, TY
-        // AL, 01, 2024061912, BEST,   0, 222N,  951W,   35, 1002, TS
-        
         const latStr = parts[6];
         const lonStr = parts[7];
         const windStr = parts[8];
@@ -160,12 +150,15 @@ const parseAtcf = (lines: string[]): Storm[] => {
         let ne = 0, se = 0, sw = 0, nw = 0;
         let rmwVal = 0;
         
-        if (parts[11]) windCode = parseInt(parts[11], 10);
-        if (parts[13]) ne = parseInt(parts[13], 10);
-        if (parts[14]) se = parseInt(parts[14], 10);
-        if (parts[15]) sw = parseInt(parts[15], 10);
-        if (parts[16]) nw = parseInt(parts[16], 10);
-        if (parts[19]) rmwVal = parseInt(parts[19], 10);
+        // Helper to safely parse int or return 0
+        const safeInt = (val: string) => parseInt(val, 10) || 0;
+        
+        if (parts[11]) windCode = safeInt(parts[11]);
+        if (parts[13]) ne = safeInt(parts[13]);
+        if (parts[14]) se = safeInt(parts[14]);
+        if (parts[15]) sw = safeInt(parts[15]);
+        if (parts[16]) nw = safeInt(parts[16]);
+        if (parts[19]) rmwVal = safeInt(parts[19]);
         
         const dateStr = rawDate.substring(0, 8);
         const timeStr = rawDate.substring(8, 10) + '00';

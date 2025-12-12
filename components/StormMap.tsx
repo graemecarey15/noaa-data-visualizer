@@ -1,4 +1,3 @@
-
 import React, { useEffect, useState, useMemo, useRef } from 'react';
 import { Storm, StormDataPoint, WindRadii } from '../types';
 import { getStormPointColor, INTENSITY_COLORS, getCategoryLabel } from '../constants';
@@ -25,8 +24,11 @@ const StormMap: React.FC<StormMapProps> = ({ storm }) => {
   const [layers, setLayers] = useState({
      track: true,
      points: true,
-     windStructure: false, // Default Off as requested
+     windStructure: true, // Defaulting to TRUE
   });
+  
+  // Legend State
+  const [showLegend, setShowLegend] = useState(true);
 
   // Fetch Map Data once on mount
   useEffect(() => {
@@ -55,11 +57,17 @@ const StormMap: React.FC<StormMapProps> = ({ storm }) => {
       }
     };
     fetchMap();
+    
+    // Auto-hide legend on small screens
+    if (window.innerWidth < 640) {
+        setShowLegend(false);
+    }
   }, []);
 
   // Reset Zoom when storm changes
   useEffect(() => {
     setViewState({ zoom: 1, panX: 0, panY: 0 });
+    setHoveredPoint(null);
   }, [storm]);
 
   // --- MAP PROJECTION LOGIC ---
@@ -116,9 +124,15 @@ const StormMap: React.FC<StormMapProps> = ({ storm }) => {
 
   // --- EVENT HANDLERS ---
   const handleZoomIn = () => setViewState(prev => ({ ...prev, zoom: Math.min(prev.zoom * 1.5, 50) }));
-  const handleZoomOut = () => setViewState(prev => ({ ...prev, zoom: Math.max(prev.zoom / 1.5, 0.1) }));
+  
+  // Restrict zoom out to prevent "world view" explosion issues
+  const handleZoomOut = () => setViewState(prev => {
+     // Ensure we don't zoom out wider than 360 degrees logic or simple 0.2 limit
+     const minZoom = Math.max(0.2, baseView.w / 180); 
+     return { ...prev, zoom: Math.max(prev.zoom / 1.5, minZoom) };
+  });
+  
   const handleReset = () => setViewState({ zoom: 1, panX: 0, panY: 0 });
-  const handleWorldView = () => setViewState({ zoom: 0.2, panX: 0, panY: 0 });
 
   const handleMouseDown = (e: React.MouseEvent) => {
     setIsDragging(true);
@@ -170,34 +184,57 @@ const StormMap: React.FC<StormMapProps> = ({ storm }) => {
     }).join(" ");
   };
 
-  // Convert Nautical Miles to Degrees (Approximate)
-  // 1 degree lat ~= 60 nm
-  // 1 degree lon ~= 60 nm * cos(lat)
-  const nmToDegLat = (nm: number) => nm / 60;
-  const nmToDegLon = (nm: number, lat: number) => nm / (60 * Math.cos(lat * Math.PI / 180));
+  // Safe Coordinate Conversion with Hard Clamping
+  const MAX_RADIUS_DEG = 12; // Hard cap ~720nm
+  
+  const nmToDegLat = (nm: number) => {
+    if (!nm || !isFinite(nm)) return 0;
+    // 1 degree lat ~= 60 nm
+    return Math.min(Math.abs(nm) / 60, MAX_RADIUS_DEG);
+  };
+  
+  const nmToDegLon = (nm: number, lat: number) => {
+    if (!nm || !isFinite(nm)) return 0;
+    // Protect against polar distortion (infinity) and zero division
+    // Clamp lat to -85..85 to avoid massive distortion
+    const safeLat = Math.max(-85, Math.min(85, lat));
+    const cosLat = Math.max(0.05, Math.abs(Math.cos(safeLat * Math.PI / 180)));
+    const deg = Math.abs(nm) / (60 * cosLat);
+    return Math.min(deg, MAX_RADIUS_DEG);
+  };
 
-  // Generate Quadrant Path for Wind Radii
-  // Start North (up, -Y), go Clockwise
-  const getQuadrantPath = (cx: number, cy: number, lat: number, ne: number, se: number, sw: number, nw: number) => {
-     if (ne === 0 && se === 0 && sw === 0 && nw === 0) return '';
-     
-     // Elliptical Arcs for nicer look
-     const rNE_x = nmToDegLon(ne, lat); const rNE_y = nmToDegLat(ne);
-     const rSE_x = nmToDegLon(se, lat); const rSE_y = nmToDegLat(se);
-     const rSW_x = nmToDegLon(sw, lat); const rSW_y = nmToDegLat(sw);
-     const rNW_x = nmToDegLon(nw, lat); const rNW_y = nmToDegLat(nw);
-
-     return `
-       M ${cx} ${cy - rNW_y}
-       A ${rNE_x} ${rNE_y} 0 0 1 ${cx + rNE_x} ${cy}
-       A ${rSE_x} ${rSE_y} 0 0 1 ${cx} ${cy + rSE_y}
-       A ${rSW_x} ${rSW_y} 0 0 1 ${cx - rSW_x} ${cy}
-       A ${rNW_x} ${rNW_y} 0 0 1 ${cx} ${cy - rNW_y}
-       Z
-     `;
+  const getMaxRad = (r: WindRadii | undefined, key: '34' | '50' | '64') => {
+      if (!r) return 0;
+      return Math.max(
+          r[`ne${key}`] || 0,
+          r[`se${key}`] || 0,
+          r[`sw${key}`] || 0,
+          r[`nw${key}`] || 0
+      );
+  };
+  
+  const hasRadii = (r: WindRadii | undefined) => {
+     if (!r) return false;
+     return (
+       (r.ne34 > 0 || r.se34 > 0 || r.sw34 > 0 || r.nw34 > 0) ||
+       (r.ne50 > 0 || r.se50 > 0 || r.sw50 > 0 || r.nw50 > 0) ||
+       (r.ne64 > 0 || r.se64 > 0 || r.sw64 > 0 || r.nw64 > 0)
+     );
   };
 
   const visiblePointRadius = baseView.pointRadius / Math.sqrt(Math.max(0.5, viewState.zoom));
+
+  // ONLY show structure when explicitly hovering a point
+  const activeStructurePoint = hoveredPoint;
+  
+  // Safe center coordinates
+  const cx = activeStructurePoint ? activeStructurePoint.lon : 0;
+  const cy = activeStructurePoint ? -activeStructurePoint.lat : 0;
+  const isCoordsValid = !isNaN(cx) && !isNaN(cy) && isFinite(cx) && isFinite(cy);
+
+  // Use a unique key for the wind group to force re-render on hover change
+  // This prevents React/Browser from interpolating between two unrelated ellipses (flying effect)
+  const windGroupKey = activeStructurePoint ? `wind-${activeStructurePoint.datetime}-${activeStructurePoint.lat}-${activeStructurePoint.lon}` : 'wind-none';
 
   return (
     <div className="w-full h-[500px] bg-slate-900/50 rounded-xl border border-slate-700 shadow-lg backdrop-blur-sm relative overflow-hidden flex flex-col select-none">
@@ -241,32 +278,61 @@ const StormMap: React.FC<StormMapProps> = ({ storm }) => {
          )}
       </div>
 
-      {/* Legend Overlay */}
-      <div className="absolute bottom-4 left-4 z-10 bg-slate-900/90 backdrop-blur p-2.5 rounded border border-slate-700 pointer-events-auto hidden sm:block shadow-xl">
-         <div className="flex flex-col gap-1.5 text-[10px] text-slate-300 font-medium">
-            <div className="flex items-center"><span className="w-3 h-3 rounded-sm mr-2" style={{background: INTENSITY_COLORS.CAT5}}></span> Category 5 (&ge;137kt)</div>
-            <div className="flex items-center"><span className="w-3 h-3 rounded-sm mr-2" style={{background: INTENSITY_COLORS.CAT4}}></span> Category 4</div>
-            <div className="flex items-center"><span className="w-3 h-3 rounded-sm mr-2" style={{background: INTENSITY_COLORS.CAT3}}></span> Category 3</div>
-            <div className="flex items-center"><span className="w-3 h-3 rounded-sm mr-2" style={{background: INTENSITY_COLORS.CAT2}}></span> Category 2</div>
-            <div className="flex items-center"><span className="w-3 h-3 rounded-sm mr-2" style={{background: INTENSITY_COLORS.CAT1}}></span> Category 1</div>
-            <div className="flex items-center"><span className="w-3 h-3 rounded-sm mr-2" style={{background: INTENSITY_COLORS.TS}}></span> Tropical Storm</div>
-            <div className="flex items-center"><span className="w-3 h-3 rounded-sm mr-2" style={{background: INTENSITY_COLORS.TD}}></span> Depression</div>
-            {layers.windStructure && (
-                <>
-                   <div className="h-px bg-slate-700 my-1"></div>
-                   <div className="flex items-center"><span className="w-3 h-3 rounded-full mr-2 border border-emerald-500 bg-emerald-500/20"></span> 34kt Radii (TS)</div>
-                   <div className="flex items-center"><span className="w-3 h-3 rounded-full mr-2 border border-yellow-500 bg-yellow-500/20"></span> 50kt Radii (Storm)</div>
-                   <div className="flex items-center"><span className="w-3 h-3 rounded-full mr-2 border border-rose-500 bg-rose-500/20"></span> 64kt Radii (Hurricane)</div>
-                </>
-            )}
-         </div>
+      {/* Collapsible Legend Overlay */}
+      <div className="absolute bottom-4 left-4 z-10 flex flex-col items-start gap-2 max-w-[200px] pointer-events-none">
+         
+         {/* Toggle Button (Visible when hidden) */}
+         {!showLegend && (
+            <button 
+                onClick={() => setShowLegend(true)}
+                className="pointer-events-auto bg-slate-900/90 backdrop-blur p-2 rounded-lg border border-slate-700 shadow-xl text-slate-400 hover:text-white hover:bg-slate-800 transition-all"
+                title="Show Map Legend"
+            >
+                <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+                </svg>
+            </button>
+         )}
+
+         {/* Legend Content */}
+         {showLegend && (
+             <div className="pointer-events-auto bg-slate-900/90 backdrop-blur p-3 rounded-lg border border-slate-700 shadow-xl animate-fade-in">
+                <div className="flex justify-between items-center mb-2 border-b border-slate-700 pb-2">
+                    <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Legend</span>
+                    <button 
+                       onClick={() => setShowLegend(false)}
+                       className="text-slate-500 hover:text-white transition-colors p-0.5 rounded hover:bg-slate-800"
+                       title="Hide Legend"
+                    >
+                       <svg xmlns="http://www.w3.org/2000/svg" className="h-3.5 w-3.5" viewBox="0 0 20 20" fill="currentColor">
+                         <path fillRule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clipRule="evenodd" />
+                       </svg>
+                    </button>
+                </div>
+                
+                <div className="flex flex-col gap-1.5 text-[10px] text-slate-300 font-medium">
+                    <div className="flex items-center"><span className="w-3 h-3 rounded-sm mr-2" style={{background: INTENSITY_COLORS.CAT5}}></span> Category 5 (&ge;137kt)</div>
+                    <div className="flex items-center"><span className="w-3 h-3 rounded-sm mr-2" style={{background: INTENSITY_COLORS.CAT4}}></span> Category 4</div>
+                    <div className="flex items-center"><span className="w-3 h-3 rounded-sm mr-2" style={{background: INTENSITY_COLORS.CAT3}}></span> Category 3</div>
+                    <div className="flex items-center"><span className="w-3 h-3 rounded-sm mr-2" style={{background: INTENSITY_COLORS.CAT2}}></span> Category 2</div>
+                    <div className="flex items-center"><span className="w-3 h-3 rounded-sm mr-2" style={{background: INTENSITY_COLORS.CAT1}}></span> Category 1</div>
+                    <div className="flex items-center"><span className="w-3 h-3 rounded-sm mr-2" style={{background: INTENSITY_COLORS.TS}}></span> Tropical Storm</div>
+                    <div className="flex items-center"><span className="w-3 h-3 rounded-sm mr-2" style={{background: INTENSITY_COLORS.TD}}></span> Depression</div>
+                    {layers.windStructure && (
+                        <>
+                        <div className="h-px bg-slate-700 my-1"></div>
+                        <div className="flex items-center"><span className="w-3 h-3 rounded-full mr-2 border border-emerald-500 bg-emerald-500/20"></span> 34kt Max Extent</div>
+                        <div className="flex items-center"><span className="w-3 h-3 rounded-full mr-2 border border-yellow-500 bg-yellow-500/20"></span> 50kt Max Extent</div>
+                        <div className="flex items-center"><span className="w-3 h-3 rounded-full mr-2 border border-rose-500 bg-rose-500/20"></span> 64kt Max Extent</div>
+                        </>
+                    )}
+                </div>
+             </div>
+         )}
       </div>
 
       {/* Zoom Controls */}
       <div className="absolute bottom-4 right-4 z-20 flex flex-col gap-2">
-         <button onClick={handleWorldView} className="bg-slate-800 hover:bg-slate-700 text-cyan-400 p-2 rounded shadow-lg border border-slate-600 transition-colors font-bold text-[10px]" title="World View">
-           WORLD
-        </button>
         <button onClick={handleReset} className="bg-slate-800 hover:bg-slate-700 text-slate-300 p-2 rounded shadow-lg border border-slate-600 transition-colors" title="Reset to Storm">
            <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
@@ -318,34 +384,7 @@ const StormMap: React.FC<StormMapProps> = ({ storm }) => {
             ))}
           </g>
 
-          {/* 2. Wind Field Layer (If Toggled & Hovered) */}
-          {layers.windStructure && hoveredPoint && hoveredPoint.radii && (
-              <g className="wind-field-layer pointer-events-none">
-                 {/* 34kt */}
-                 <path 
-                    d={getQuadrantPath(hoveredPoint.lon, -hoveredPoint.lat, hoveredPoint.lat, hoveredPoint.radii.ne34, hoveredPoint.radii.se34, hoveredPoint.radii.sw34, hoveredPoint.radii.nw34)}
-                    fill="rgba(16, 185, 129, 0.2)"
-                    stroke="rgba(16, 185, 129, 0.5)"
-                    strokeWidth={visiblePointRadius * 0.2}
-                 />
-                 {/* 50kt */}
-                 <path 
-                    d={getQuadrantPath(hoveredPoint.lon, -hoveredPoint.lat, hoveredPoint.lat, hoveredPoint.radii.ne50, hoveredPoint.radii.se50, hoveredPoint.radii.sw50, hoveredPoint.radii.nw50)}
-                    fill="rgba(234, 179, 8, 0.2)"
-                    stroke="rgba(234, 179, 8, 0.5)"
-                    strokeWidth={visiblePointRadius * 0.2}
-                 />
-                 {/* 64kt */}
-                 <path 
-                    d={getQuadrantPath(hoveredPoint.lon, -hoveredPoint.lat, hoveredPoint.lat, hoveredPoint.radii.ne64, hoveredPoint.radii.se64, hoveredPoint.radii.sw64, hoveredPoint.radii.nw64)}
-                    fill="rgba(244, 63, 94, 0.2)"
-                    stroke="rgba(244, 63, 94, 0.5)"
-                    strokeWidth={visiblePointRadius * 0.2}
-                 />
-              </g>
-          )}
-
-          {/* 3. Storm Track Line */}
+          {/* 2. Storm Track Line */}
           {layers.track && (
             <polyline
                 points={storm.track.map(p => `${p.lon},${-p.lat}`).join(" ")}
@@ -357,9 +396,55 @@ const StormMap: React.FC<StormMapProps> = ({ storm }) => {
             />
           )}
 
+          {/* 3. Wind Field Layer (Dynamic: Hovered Only) - Circular Approximation */}
+          {/* Note: Key is vital to force React to replace elements instead of interpolating attributes */}
+          {layers.windStructure && activeStructurePoint && isCoordsValid && activeStructurePoint.radii && hasRadii(activeStructurePoint.radii) && (
+              <g key={windGroupKey} className="wind-field-layer pointer-events-none opacity-100">
+                 {/* 34kt */}
+                 {getMaxRad(activeStructurePoint.radii, '34') > 0 && (
+                     <ellipse 
+                        cx={cx}
+                        cy={cy}
+                        rx={nmToDegLon(getMaxRad(activeStructurePoint.radii, '34'), activeStructurePoint.lat)}
+                        ry={nmToDegLat(getMaxRad(activeStructurePoint.radii, '34'))}
+                        fill="rgba(16, 185, 129, 0.2)"
+                        stroke="rgba(16, 185, 129, 0.5)"
+                        strokeWidth={visiblePointRadius * 0.2}
+                     />
+                 )}
+                 {/* 50kt */}
+                 {getMaxRad(activeStructurePoint.radii, '50') > 0 && (
+                     <ellipse 
+                        cx={cx}
+                        cy={cy}
+                        rx={nmToDegLon(getMaxRad(activeStructurePoint.radii, '50'), activeStructurePoint.lat)}
+                        ry={nmToDegLat(getMaxRad(activeStructurePoint.radii, '50'))}
+                        fill="rgba(234, 179, 8, 0.2)"
+                        stroke="rgba(234, 179, 8, 0.5)"
+                        strokeWidth={visiblePointRadius * 0.2}
+                     />
+                 )}
+                 {/* 64kt */}
+                 {getMaxRad(activeStructurePoint.radii, '64') > 0 && (
+                     <ellipse 
+                        cx={cx}
+                        cy={cy}
+                        rx={nmToDegLon(getMaxRad(activeStructurePoint.radii, '64'), activeStructurePoint.lat)}
+                        ry={nmToDegLat(getMaxRad(activeStructurePoint.radii, '64'))}
+                        fill="rgba(244, 63, 94, 0.2)"
+                        stroke="rgba(244, 63, 94, 0.5)"
+                        strokeWidth={visiblePointRadius * 0.2}
+                     />
+                 )}
+              </g>
+          )}
+
           {/* 4. Storm Points */}
           {layers.points && storm.track.map((p, i) => {
             const pointColor = getStormPointColor(p.maxWind, p.status);
+            // Highlight the hovered point
+            const isHovered = activeStructurePoint === p;
+            
             return (
               <circle
                 key={i}
@@ -367,30 +452,63 @@ const StormMap: React.FC<StormMapProps> = ({ storm }) => {
                 cy={-p.lat}
                 r={p.recordIdentifier === 'L' ? visiblePointRadius * 1.5 : visiblePointRadius}
                 fill={pointColor}
-                stroke={p.recordIdentifier === 'L' ? '#10b981' : 'transparent'}
-                strokeWidth={visiblePointRadius * 0.3}
-                className="transition-all duration-200 hover:opacity-100 cursor-pointer hover:stroke-white/50"
+                stroke={isHovered ? '#fff' : (p.recordIdentifier === 'L' ? '#10b981' : 'transparent')}
+                strokeWidth={isHovered ? visiblePointRadius * 0.4 : visiblePointRadius * 0.3}
+                strokeOpacity={isHovered ? 0.8 : 1}
+                className="hover:opacity-100 cursor-pointer hover:stroke-white/50"
                 onMouseEnter={() => setHoveredPoint(p)}
                 onMouseLeave={() => setHoveredPoint(null)}
               />
             );
           })}
 
-          {/* 5. Highlighted Point Ring */}
-          {hoveredPoint && (
-             <circle 
-                cx={hoveredPoint.lon}
-                cy={-hoveredPoint.lat}
-                r={visiblePointRadius * 2}
-                fill="none"
-                stroke="white"
-                strokeWidth={visiblePointRadius * 0.2}
-                className="animate-ping"
-             />
+          {/* 5. Highlighted Point Ring (Hover) */}
+          {hoveredPoint && !isNaN(hoveredPoint.lon) && !isNaN(hoveredPoint.lat) && (
+             <g key={`highlight-${hoveredPoint.datetime}`}>
+                {/* Static Ring for visibility */}
+                <circle 
+                    cx={hoveredPoint.lon}
+                    cy={-hoveredPoint.lat}
+                    r={visiblePointRadius * 1.8}
+                    fill="none"
+                    stroke="white"
+                    strokeWidth={visiblePointRadius * 0.3}
+                    className="pointer-events-none"
+                    opacity={0.5}
+                />
+                {/* 
+                   REMOVED 'animate-ping' (CSS Transform) 
+                   Replaced with Native SVG Animation (SMIL) to pulse radius/opacity safely 
+                   without coordinate system distortion or flying artifacts.
+                */}
+                <circle 
+                    cx={hoveredPoint.lon}
+                    cy={-hoveredPoint.lat}
+                    r={visiblePointRadius * 2}
+                    fill="none"
+                    stroke="white"
+                    strokeWidth={visiblePointRadius * 0.2}
+                    opacity="0.8"
+                    className="pointer-events-none"
+                >
+                    <animate 
+                       attributeName="r" 
+                       values={`${visiblePointRadius * 1.8};${visiblePointRadius * 2.5};${visiblePointRadius * 1.8}`} 
+                       dur="2s" 
+                       repeatCount="indefinite" 
+                    />
+                    <animate 
+                       attributeName="opacity" 
+                       values="0.8;0.1;0.8" 
+                       dur="2s" 
+                       repeatCount="indefinite" 
+                    />
+                </circle>
+             </g>
           )}
         </svg>
 
-        {/* Floating Tooltip */}
+        {/* Floating Tooltip (Only for Hovered Point) */}
         {hoveredPoint && (
            <div 
              className="absolute bg-slate-800 border border-slate-600 p-2.5 rounded shadow-2xl text-xs z-50 pointer-events-none whitespace-nowrap backdrop-blur-md"
@@ -417,13 +535,51 @@ const StormMap: React.FC<StormMapProps> = ({ storm }) => {
                  {hoveredPoint.status} • <span className="text-cyan-400 font-bold">{hoveredPoint.maxWind} kts</span> • {hoveredPoint.minPressure > 0 ? `${hoveredPoint.minPressure}mb` : ''}
               </div>
               
-              {/* Show Structure Info if Toggled On */}
-              {hoveredPoint.radii && (hoveredPoint.radii.ne34 > 0 || hoveredPoint.radii.ne50 > 0 || hoveredPoint.radii.ne64 > 0) && (
+              {/* Detailed Structure Grid */}
+              {hasRadii(hoveredPoint.radii) && layers.windStructure ? (
+                   <div className="mt-2 pt-2 border-t border-slate-700">
+                      <div className="grid grid-cols-5 gap-x-3 gap-y-1 text-[9px] font-mono text-right">
+                         <div className="text-left font-bold text-slate-500">KTS</div>
+                         <div className="text-slate-500 text-center">NE</div>
+                         <div className="text-slate-500 text-center">SE</div>
+                         <div className="text-slate-500 text-center">SW</div>
+                         <div className="text-slate-500 text-center">NW</div>
+
+                         {getMaxRad(hoveredPoint.radii, '34') > 0 && (
+                            <>
+                               <div className="text-left text-emerald-400 font-bold">34</div>
+                               <div className="text-slate-300">{hoveredPoint.radii?.ne34}</div>
+                               <div className="text-slate-300">{hoveredPoint.radii?.se34}</div>
+                               <div className="text-slate-300">{hoveredPoint.radii?.sw34}</div>
+                               <div className="text-slate-300">{hoveredPoint.radii?.nw34}</div>
+                            </>
+                         )}
+                         {getMaxRad(hoveredPoint.radii, '50') > 0 && (
+                            <>
+                               <div className="text-left text-yellow-400 font-bold">50</div>
+                               <div className="text-slate-300">{hoveredPoint.radii?.ne50}</div>
+                               <div className="text-slate-300">{hoveredPoint.radii?.se50}</div>
+                               <div className="text-slate-300">{hoveredPoint.radii?.sw50}</div>
+                               <div className="text-slate-300">{hoveredPoint.radii?.nw50}</div>
+                            </>
+                         )}
+                         {getMaxRad(hoveredPoint.radii, '64') > 0 && (
+                            <>
+                               <div className="text-left text-rose-400 font-bold">64</div>
+                               <div className="text-slate-300">{hoveredPoint.radii?.ne64}</div>
+                               <div className="text-slate-300">{hoveredPoint.radii?.se64}</div>
+                               <div className="text-slate-300">{hoveredPoint.radii?.sw64}</div>
+                               <div className="text-slate-300">{hoveredPoint.radii?.nw64}</div>
+                            </>
+                         )}
+                      </div>
+                      <div className="text-slate-500 text-[9px] mt-1 text-center">Radii in Nautical Miles (nm)</div>
+                   </div>
+              ) : hasRadii(hoveredPoint.radii) && (
                   <div className="mt-1 pt-1 border-t border-slate-700 text-[9px] grid grid-cols-2 gap-x-2">
-                     <span className="text-emerald-400">NE34: {hoveredPoint.radii.ne34}nm</span>
-                     {hoveredPoint.radii.ne50 > 0 && <span className="text-yellow-400">NE50: {hoveredPoint.radii.ne50}nm</span>}
-                     {hoveredPoint.radii.ne64 > 0 && <span className="text-rose-400">NE64: {hoveredPoint.radii.ne64}nm</span>}
-                     <span className="text-slate-400">RMW: {hoveredPoint.rmw ? hoveredPoint.rmw + 'nm' : 'N/A'}</span>
+                     <span className="text-emerald-400">Max 34kt: {getMaxRad(hoveredPoint.radii, '34')}nm</span>
+                     {getMaxRad(hoveredPoint.radii, '50') > 0 && <span className="text-yellow-400">Max 50kt: {getMaxRad(hoveredPoint.radii, '50')}nm</span>}
+                     {getMaxRad(hoveredPoint.radii, '64') > 0 && <span className="text-rose-400">Max 64kt: {getMaxRad(hoveredPoint.radii, '64')}nm</span>}
                   </div>
               )}
 

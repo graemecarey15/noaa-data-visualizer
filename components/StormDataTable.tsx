@@ -73,6 +73,52 @@ const StormDataTable: React.FC<StormDataTableProps> = ({ storm }) => {
      );
   };
 
+  const handleExportCSV = () => {
+    if (!storm || !storm.track) return;
+
+    const headers = [
+      'Date', 'Time (UTC)', 'Status', 'Lat', 'Lon', 'Wind (kt)', 'Pressure (mb)', 
+      'RMW (nm)', 'Event',
+      'NE34', 'SE34', 'SW34', 'NW34',
+      'NE50', 'SE50', 'SW50', 'NW50',
+      'NE64', 'SE64', 'SW64', 'NW64'
+    ];
+
+    const rows = storm.track.map(pt => {
+       const r = pt.radii || { 
+         ne34:0, se34:0, sw34:0, nw34:0, 
+         ne50:0, se50:0, sw50:0, nw50:0, 
+         ne64:0, se64:0, sw64:0, nw64:0 
+       };
+       
+       return [
+         pt.date,
+         pt.time,
+         pt.status,
+         pt.lat,
+         pt.lon,
+         pt.maxWind,
+         pt.minPressure || '',
+         pt.rmw || '',
+         pt.recordIdentifier || '',
+         r.ne34 || 0, r.se34 || 0, r.sw34 || 0, r.nw34 || 0,
+         r.ne50 || 0, r.se50 || 0, r.sw50 || 0, r.nw50 || 0,
+         r.ne64 || 0, r.se64 || 0, r.sw64 || 0, r.nw64 || 0,
+       ].join(',');
+    });
+
+    const csvContent = [headers.join(','), ...rows].join('\n');
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.setAttribute('href', url);
+    link.setAttribute('download', `${storm.id}_${storm.name}_track_data.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    setShowMenu(false);
+  };
+
   return (
     <div className="w-full bg-slate-900/50 rounded-xl border border-slate-700 overflow-visible shadow-lg backdrop-blur-sm relative">
       <div className="p-4 border-b border-slate-700 bg-slate-800/50 flex justify-between items-center">
@@ -111,6 +157,17 @@ const StormDataTable: React.FC<StormDataTableProps> = ({ storm }) => {
                         <input type="checkbox" checked={visibleColumns.size64} onChange={() => toggleColumn('size64')} className="rounded bg-slate-900 border-slate-600 accent-cyan-500" />
                         Size (64kt / Hurricane)
                     </label>
+
+                    <div className="my-2 border-t border-slate-700"></div>
+                    <button 
+                        onClick={handleExportCSV}
+                        className="w-full text-left px-2 py-1.5 hover:bg-slate-700 rounded text-xs text-cyan-400 font-bold flex items-center gap-2"
+                    >
+                        <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
+                        </svg>
+                        Export Data (CSV)
+                    </button>
                 </div>
             )}
         </div>
