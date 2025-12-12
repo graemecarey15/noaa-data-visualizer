@@ -3,7 +3,9 @@ import { Storm } from '../types';
 import { STORM_STATUS_COLORS } from '../constants';
 
 interface StormDataTableProps {
-  storm?: Storm | null;
+  activeStorms: Storm[];
+  focusedStormId: string;
+  onFocus: (id: string) => void;
 }
 
 const HeaderTooltip: React.FC<{ label: string; tooltip: string; align?: 'left' | 'right' | 'center' }> = ({ label, tooltip, align = 'left' }) => (
@@ -26,7 +28,7 @@ const HeaderTooltip: React.FC<{ label: string; tooltip: string; align?: 'left' |
   </th>
 );
 
-const StormDataTable: React.FC<StormDataTableProps> = ({ storm }) => {
+const StormDataTable: React.FC<StormDataTableProps> = ({ activeStorms, focusedStormId, onFocus }) => {
   const [showMenu, setShowMenu] = useState(false);
   const [visibleColumns, setVisibleColumns] = useState({
      rmw: true,
@@ -34,6 +36,8 @@ const StormDataTable: React.FC<StormDataTableProps> = ({ storm }) => {
      size50: false, // Default Hidden
      size64: false  // Default Hidden
   });
+
+  const storm = activeStorms.find(s => s.id === focusedStormId);
 
   const toggleColumn = (key: keyof typeof visibleColumns) => {
      setVisibleColumns(prev => ({ ...prev, [key]: !prev[key] }));
@@ -119,12 +123,65 @@ const StormDataTable: React.FC<StormDataTableProps> = ({ storm }) => {
   };
 
   return (
-    <div className="w-full bg-slate-900/50 rounded-xl border border-slate-700 overflow-visible shadow-lg backdrop-blur-sm relative">
-      <div className="p-4 border-b border-slate-700 bg-slate-800/50 flex justify-between items-center">
-        <h3 className="text-slate-300 font-semibold text-sm uppercase tracking-wider">Detailed Data Log</h3>
+    <div className="w-full bg-slate-900/50 rounded-xl border border-slate-700 overflow-visible shadow-lg backdrop-blur-sm relative flex flex-col">
+      
+      {/* Tabs Header */}
+      <div className="flex items-center bg-slate-800/80 rounded-t-xl border-b border-slate-700 overflow-x-auto scrollbar-hide">
+         {activeStorms.length === 0 ? (
+             <div className="px-4 py-3 text-xs font-bold uppercase text-slate-500">No Active Storms</div>
+         ) : (
+             activeStorms.map(s => {
+                 const isActive = s.id === focusedStormId;
+                 
+                 // --- Metadata Calculation for Tab ---
+                 const maxWind = s.track.length > 0 ? Math.max(...s.track.map(t => t.maxWind)) : 0;
+                 
+                 let peakStatus = 'TD';
+                 if (maxWind >= 64) peakStatus = 'HU';
+                 else if (maxWind >= 34) peakStatus = 'TS';
+                 else if (maxWind <= 33) peakStatus = 'TD';
+
+                 let catLabel = 'TD';
+                 if (maxWind >= 137) catLabel = 'Cat 5';
+                 else if (maxWind >= 113) catLabel = 'Cat 4';
+                 else if (maxWind >= 96) catLabel = 'Cat 3';
+                 else if (maxWind >= 83) catLabel = 'Cat 2';
+                 else if (maxWind >= 64) catLabel = 'Cat 1';
+                 else if (maxWind >= 34) catLabel = 'TS';
+
+                 return (
+                     <button
+                        key={s.id}
+                        onClick={() => onFocus(s.id)}
+                        className={`
+                           px-4 py-2 text-xs font-bold uppercase tracking-wider transition-all border-r border-slate-700/50 whitespace-nowrap min-w-[120px] text-center
+                           ${isActive 
+                               ? 'bg-slate-700/80 text-cyan-400 border-b-2 border-b-cyan-400 shadow-[inset_0_-2px_4px_rgba(0,0,0,0.2)]' 
+                               : 'text-slate-500 hover:text-slate-300 hover:bg-slate-700/30 border-b-2 border-b-transparent'}
+                        `}
+                     >
+                        <div className="flex flex-col items-center leading-snug">
+                           <div className="flex items-center gap-1.5">
+                              <span className="text-sm font-extrabold">{s.name}</span>
+                              {peakStatus && <span className={`px-1 rounded text-[9px] ${isActive ? 'bg-cyan-900/50 text-cyan-200' : 'bg-slate-800 text-slate-400 border border-slate-700'}`}>{peakStatus}</span>}
+                           </div>
+                           <div className="text-[10px] font-medium opacity-70">
+                              {s.year} - {catLabel}
+                           </div>
+                        </div>
+                     </button>
+                 );
+             })
+         )}
+      </div>
+
+      {/* Control Bar */}
+      <div className="p-3 border-b border-slate-700 bg-slate-800/30 flex justify-between items-center">
+        <div className="text-xs text-slate-400 font-mono pl-1">
+             {storm ? `Displaying ${storm.dataCount} records` : 'Select a storm to view data'}
+        </div>
+        
         <div className="flex items-center gap-3 relative">
-            <span className="text-xs text-slate-500 font-mono">{storm ? storm.dataCount : 0} Records</span>
-            
             <button 
                 onClick={() => setShowMenu(!showMenu)}
                 disabled={!storm}

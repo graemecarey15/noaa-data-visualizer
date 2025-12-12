@@ -1,6 +1,6 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { parseHurdat2 } from './utils/parser';
-import { SAMPLE_HURDAT_DATA, PRELOADED_SEASON_DATA, getCategoryLabel } from './constants';
+import { SAMPLE_HURDAT_DATA, PRELOADED_SEASON_DATA, getCategoryLabel, STORM_STATUS_COLORS } from './constants';
 import { Storm } from './types';
 import StormChart from './components/StormChart';
 import StormMap from './components/StormMap';
@@ -8,6 +8,8 @@ import StormDataTable from './components/StormDataTable';
 import StormSummary from './components/StormSummary';
 import DataImporter, { ImportTab } from './components/DataImporter';
 import StormSelector from './components/StormSelector';
+
+const MAX_VIEW_STORMS = 7;
 
 const App: React.FC = () => {
   // We keep two sets of data:
@@ -17,7 +19,14 @@ const App: React.FC = () => {
   const [userStorms, setUserStorms] = useState<Storm[]>([]);
   
   // State for View
-  const [selectedStormId, setSelectedStormId] = useState<string>('');
+  // activeStormIds represents ORDERED list. 
+  // Indices 0 to (MAX_VIEW_STORMS-1) are visible. Rest are hidden (overflow).
+  const [activeStormIds, setActiveStormIds] = useState<string[]>([]);
+  const [focusedStormId, setFocusedStormId] = useState<string>(''); 
+  
+  // UI State
+  const [overflowMenuOpen, setOverflowMenuOpen] = useState<boolean>(false);
+
   const [showInput, setShowInput] = useState<boolean>(false);
   const [importTab, setImportTab] = useState<ImportTab>('active');
   const [isHydrated, setIsHydrated] = useState<boolean>(false);
@@ -34,15 +43,14 @@ const App: React.FC = () => {
   // Default to 5 Years ('last5')
   const [activePreset, setActivePreset] = useState<string>('last5'); 
 
+  // Refs for click outside handling
+  const overflowMenuRef = useRef<HTMLDivElement>(null);
+
   // 1. Load Data & State on Mount
   useEffect(() => {
     const initApp = () => {
       try {
         // A. Load Defaults
-        // Temporarily disabled preloaded data
-        // const sampleParsed = parseHurdat2(SAMPLE_HURDAT_DATA);
-        // const preloadedParsed = parseHurdat2(PRELOADED_SEASON_DATA);
-        // setDefaultStorms([...sampleParsed, ...preloadedParsed]);
         setDefaultStorms([]);
 
         // B. Load Persisted User Storms
@@ -57,7 +65,7 @@ const App: React.FC = () => {
         setIsHydrated(true);
       } catch (e) {
         console.error("Failed to initialize app", e);
-        setIsHydrated(true); // Allow render even if fail
+        setIsHydrated(true); 
       }
     };
     initApp();
@@ -67,7 +75,6 @@ const App: React.FC = () => {
   useEffect(() => {
     if (isHydrated) {
       try {
-        // Only save if we have items, otherwise let the clear handler manage the empty state
         if (userStorms.length > 0) {
             localStorage.setItem('hurdat_user_storms', JSON.stringify(userStorms));
         }
@@ -77,10 +84,21 @@ const App: React.FC = () => {
     }
   }, [userStorms, isHydrated]);
 
+  // Click Outside Listener for Menus
+  useEffect(() => {
+      const handleClickOutside = (event: MouseEvent) => {
+          if (overflowMenuRef.current && !overflowMenuRef.current.contains(event.target as Node)) {
+              setOverflowMenuOpen(false);
+          }
+      };
+      document.addEventListener('mousedown', handleClickOutside);
+      return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+
   // Combined Storms List (Memoized)
   const storms = useMemo(() => {
     const userIds = new Set(userStorms.map(s => s.id));
-    // User storms override defaults if ID matches
     const activeDefaults = defaultStorms.filter(s => !userIds.has(s.id));
     const activeUser = userStorms;
     const all = [...activeUser, ...activeDefaults];
@@ -97,38 +115,23 @@ const App: React.FC = () => {
     if (storms.length === 0) return { dataMinYear: 1851, dataMaxYear: cy + 1 };
     
     const years = storms.map(s => s.year);
-    const max = Math.max(...years, cy); // Ensure max includes current year if data exists
+    const max = Math.max(...years, cy);
     const min = Math.min(...years);
-    return { 
-      dataMinYear: min, 
-      dataMaxYear: max 
-    };
+    return { dataMinYear: min, dataMaxYear: max };
   }, [storms]);
 
-  // Filtered list for the selector based on date picker
-  const visibleStorms = useMemo(() => {
+  // Filtered list for the selector
+  const visibleStormsSelector = useMemo(() => {
     return storms.filter(s => 
        (filterYearStart === 0 || s.year >= filterYearStart) && 
        (filterYearEnd === 0 || s.year <= filterYearEnd)
     );
   }, [storms, filterYearStart, filterYearEnd]);
 
-  // Auto-Select Logic
-  useEffect(() => {
-    if (isHydrated && !selectedStormId && storms.length > 0) {
-      // Prefer visible storms first
-      if (visibleStorms.length > 0) {
-         setSelectedStormId(visibleStorms[0].id);
-      } else {
-         setSelectedStormId(storms[0].id);
-      }
-    }
-  }, [storms, visibleStorms, selectedStormId, isHydrated]);
 
-  // Sync filters to data bounds if not set (Initialization)
+  // Sync filters to data bounds
   useEffect(() => {
     if (filterYearStart === 0 && dataMinYear > 0) {
-       // Apply Default Preset Logic based on activePreset state
        if (activePreset === 'last5') {
           setFilterYearStart(currentYear - 5);
           setFilterYearEnd(currentYear);
@@ -136,7 +139,6 @@ const App: React.FC = () => {
           setFilterYearStart(2025);
           setFilterYearEnd(2025);
        } else {
-          // Fallback to full range
           setFilterYearStart(dataMinYear);
           setFilterYearEnd(dataMaxYear);
        }
@@ -152,8 +154,15 @@ const App: React.FC = () => {
     });
 
     if (newStorms.length > 0) {
-      setSelectedStormId(newStorms[0].id);
+        const years = newStorms.map(s => s.year);
+        const minImport = Math.min(...years);
+        const maxImport = Math.max(...years);
+        
+        setFilterYearStart(minImport);
+        setFilterYearEnd(maxImport);
+        setActivePreset(''); 
     }
+    
     setShowInput(false);
   };
 
@@ -171,47 +180,27 @@ const App: React.FC = () => {
     setActivePreset('last5');
     setFilterYearStart(currentYear - 5);
     setFilterYearEnd(currentYear);
-
-    setTimeout(() => {
-        localStorage.removeItem('hurdat_user_storms');
-    }, 0);
-
-    if (defaultStorms.length > 0) setSelectedStormId(defaultStorms[0].id);
-    else setSelectedStormId('');
-    
+    setTimeout(() => { localStorage.removeItem('hurdat_user_storms'); }, 0);
+    setActiveStormIds([]);
+    setFocusedStormId('');
     setShowResetModal(false);
   };
 
   const applyYearPreset = (preset: string) => {
       setActivePreset(preset);
       switch(preset) {
-          case 'last1':
-              setFilterYearStart(2025);
-              setFilterYearEnd(2025);
-              break;
-          case 'last5':
-              setFilterYearStart(currentYear - 5);
-              setFilterYearEnd(currentYear);
-              break;
-          case 'last20':
-              setFilterYearStart(currentYear - 20);
-              setFilterYearEnd(currentYear);
-              break;
-          case 'satellite':
-              setFilterYearStart(1979);
-              setFilterYearEnd(currentYear);
-              break;
-          case 'all':
-              setFilterYearStart(dataMinYear);
-              setFilterYearEnd(currentYear + 1);
-              break;
+          case 'last1': setFilterYearStart(2025); setFilterYearEnd(2025); break;
+          case 'last5': setFilterYearStart(currentYear - 5); setFilterYearEnd(currentYear); break;
+          case 'last20': setFilterYearStart(currentYear - 20); setFilterYearEnd(currentYear); break;
+          case 'satellite': setFilterYearStart(1979); setFilterYearEnd(currentYear); break;
+          case 'all': setFilterYearStart(dataMinYear); setFilterYearEnd(currentYear + 1); break;
       }
   };
   
   const isPresetDisabled = (value: string) => {
       if (storms.length === 0) return true;
       switch(value) {
-          case 'last1': return dataMaxYear < 2025; // Disable if no 2025 data present
+          case 'last1': return dataMaxYear < 2025; 
           case 'last5': return dataMinYear > (currentYear - 5);
           case 'last20': return dataMinYear > (currentYear - 20);
           case 'satellite': return dataMinYear > 1979;
@@ -220,9 +209,110 @@ const App: React.FC = () => {
       }
   };
 
-  const selectedStorm = useMemo(() => 
-    storms.find(s => s.id === selectedStormId), 
-  [storms, selectedStormId]);
+  // --- SELECTION & SWAPPING LOGIC ---
+
+  const handleStormOpen = (id: string) => {
+      if (activeStormIds.includes(id)) {
+          // If storm is already active but hidden (overflow), swap it into view
+          const idx = activeStormIds.indexOf(id);
+          if (idx >= MAX_VIEW_STORMS) {
+              const newOrder = [...activeStormIds];
+              // Remove from overflow
+              newOrder.splice(idx, 1);
+              // Insert at last visible position (index 6)
+              newOrder.splice(MAX_VIEW_STORMS - 1, 0, id);
+              setActiveStormIds(newOrder);
+          }
+      } else {
+          // Add new storm
+          const newOrder = [...activeStormIds];
+          if (newOrder.length < MAX_VIEW_STORMS) {
+               newOrder.push(id);
+          } else {
+               // Full view: Insert at last visible position (index 6), pushing old 6 to overflow
+               newOrder.splice(MAX_VIEW_STORMS - 1, 0, id);
+          }
+          setActiveStormIds(newOrder);
+      }
+      setFocusedStormId(id);
+  };
+
+  const handleStormToggle = (id: string) => {
+      if (activeStormIds.includes(id)) {
+          // Closing
+          handleCloseStorm(null, id);
+      } else {
+          handleStormOpen(id);
+      }
+  };
+
+  const handleBatchSelect = (ids: string[], select: boolean) => {
+      if (select) {
+          const newIds = ids.filter(id => !activeStormIds.includes(id));
+          if (newIds.length === 0) return;
+          setActiveStormIds([...activeStormIds, ...newIds]);
+          if (!focusedStormId) setFocusedStormId(newIds[0]);
+      } else {
+          const newActive = activeStormIds.filter(id => !ids.includes(id));
+          setActiveStormIds(newActive);
+          if (ids.includes(focusedStormId)) {
+             setFocusedStormId(newActive.length > 0 ? newActive[0] : '');
+          }
+      }
+  };
+
+  const handleCloseStorm = (e: React.MouseEvent | null, id: string) => {
+      e?.stopPropagation();
+      const newActive = activeStormIds.filter(sid => sid !== id);
+      setActiveStormIds(newActive);
+      
+      if (focusedStormId === id) {
+          // If we closed the focused storm, check visibility of remaining
+          if (newActive.length > 0) {
+              // Try to focus the one that took its place, or the last one
+              setFocusedStormId(newActive[0]);
+          } else {
+              setFocusedStormId('');
+          }
+      }
+  };
+  
+  // TOGGLE VISIBILITY LOGIC (For View Manager)
+  const handleToggleVisibility = (id: string) => {
+      const idx = activeStormIds.indexOf(id);
+      if (idx === -1) return;
+      
+      const newOrder = [...activeStormIds];
+      const isVisible = idx < MAX_VIEW_STORMS;
+      
+      if (isVisible) {
+          // Move from Visible -> Hidden (Bank)
+          // Strategy: Move to end of list.
+          const [item] = newOrder.splice(idx, 1);
+          newOrder.push(item);
+      } else {
+          // Move from Hidden -> Visible
+          // Strategy: Move to last visible slot (MAX_VIEW_STORMS - 1).
+          // If list is full, this naturally pushes the item currently at that slot to the overflow.
+          const [item] = newOrder.splice(idx, 1);
+          const targetIdx = Math.min(newOrder.length, MAX_VIEW_STORMS - 1);
+          newOrder.splice(targetIdx, 0, item);
+          setFocusedStormId(id);
+      }
+      setActiveStormIds(newOrder);
+  };
+
+
+  // Derived Objects
+  const visibleIds = activeStormIds.slice(0, MAX_VIEW_STORMS);
+  const hiddenIds = activeStormIds.slice(MAX_VIEW_STORMS);
+  
+  const visibleStorms = visibleIds.map(id => storms.find(s => s.id === id)).filter(Boolean) as Storm[];
+  const hiddenStorms = hiddenIds.map(id => storms.find(s => s.id === id)).filter(Boolean) as Storm[];
+  
+  const focusedStorm = useMemo(() => 
+      storms.find(s => s.id === focusedStormId), 
+  [storms, focusedStormId]);
 
   const YEAR_PRESETS = [
     { label: "'25", value: 'last1', title: '2025 Season' },
@@ -272,19 +362,9 @@ const App: React.FC = () => {
               `}
             >
               {saveStatus === 'saved' ? (
-                <>
-                   <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                   </svg>
-                   Saved!
-                </>
+                <>Saved!</>
               ) : (
-                <>
-                   <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V4" />
-                   </svg>
-                   Save Workspace
-                </>
+                <>Save Workspace</>
               )}
             </button>
 
@@ -305,7 +385,7 @@ const App: React.FC = () => {
       </header>
 
       {/* Main Content */}
-      <main className="max-w-7xl mx-auto p-4 md:p-6 space-y-10">
+      <main className="max-w-7xl mx-auto p-4 md:p-6 space-y-6">
         
         {/* Control Bar */}
         <div className="bg-slate-900/50 border border-slate-800 p-4 rounded-xl backdrop-blur-sm shadow-lg">
@@ -315,14 +395,15 @@ const App: React.FC = () => {
              {/* Command Palette Storm Selector */}
              <div className="relative flex-1 min-w-[200px] max-w-sm">
                 <StormSelector 
-                   storms={visibleStorms} 
-                   selectedId={selectedStormId} 
-                   onSelect={setSelectedStormId}
+                   storms={visibleStormsSelector} 
+                   selectedIds={new Set(activeStormIds)} 
+                   onSelect={handleStormOpen}
+                   onToggle={handleStormToggle}
+                   onSelectBatch={handleBatchSelect}
                    activePreset={activePreset}
                    onPresetChange={applyYearPreset}
                    presetOptions={presetOptions}
                    onImport={() => {
-                       // Contextual import: if on '25 preset, open active tab. Else archive.
                        const targetTab = activePreset === 'last1' ? 'active' : 'archive';
                        setImportTab(targetTab);
                        setShowInput(true);
@@ -331,8 +412,7 @@ const App: React.FC = () => {
              </div>
 
              <div className="flex items-center gap-3 text-xs text-slate-500 font-medium whitespace-nowrap hidden sm:flex">
-                {/* BUTTON REMOVED FROM HERE */}
-                <span><span className="text-slate-300 font-bold">{visibleStorms.length}</span> storms</span>
+                <span><span className="text-slate-300 font-bold">{visibleStormsSelector.length}</span> storms</span>
              </div>
 
              {/* Year Range Inputs */}
@@ -352,7 +432,6 @@ const App: React.FC = () => {
                 />
              </div>
 
-             {/* Divider / Spacer */}
              <div className="hidden xl:block w-px h-8 bg-slate-700 mx-2"></div>
 
              {/* Preset Buttons */}
@@ -381,22 +460,154 @@ const App: React.FC = () => {
           </div>
         </div>
 
-        <div className="space-y-10 animate-fade-in">
-          {/* Top Row: Summary Stats */}
-          <StormSummary storm={selectedStorm} />
+        {/* ACTIVE STORM TABS */}
+        {visibleStorms.length > 0 && (
+            <div className="flex items-center gap-2 overflow-visible pb-2 relative">
+                
+                {visibleStorms.map(storm => {
+                    const isFocused = storm.id === focusedStormId;
+                    const maxWind = Math.max(...storm.track.map(t => t.maxWind));
+                    
+                    // Metadata
+                    let peakStatus = 'TD';
+                    if (maxWind >= 64) peakStatus = 'HU';
+                    else if (maxWind >= 34) peakStatus = 'TS';
+                    
+                    const badgeColor = STORM_STATUS_COLORS[peakStatus] || '#94a3b8';
+
+                    let shortCat = 'TD';
+                    if (maxWind >= 137) shortCat = 'Cat 5';
+                    else if (maxWind >= 113) shortCat = 'Cat 4';
+                    else if (maxWind >= 96) shortCat = 'Cat 3';
+                    else if (maxWind >= 83) shortCat = 'Cat 2';
+                    else if (maxWind >= 64) shortCat = 'Cat 1';
+                    else if (maxWind >= 34) shortCat = 'TS';
+
+                    return (
+                        <div 
+                            key={storm.id}
+                            className={`
+                                relative flex items-center gap-2 pl-3 pr-2 py-2 rounded-t-lg border-t border-x border-b-0 min-w-[140px] max-w-[200px] transition-all group
+                                ${isFocused 
+                                    ? 'bg-slate-800 border-slate-700 text-slate-200 shadow-sm z-10' 
+                                    : 'bg-slate-900/50 border-transparent text-slate-500 hover:bg-slate-800/50 hover:text-slate-400'}
+                            `}
+                            onClick={() => setFocusedStormId(storm.id)}
+                        >
+                            <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: badgeColor }}></span>
+                            <div className="flex flex-col min-w-0 flex-1 justify-center cursor-pointer">
+                                <div className="flex items-center gap-2 truncate leading-tight">
+                                    <span className={`text-sm font-extrabold ${isFocused ? 'text-white' : 'text-slate-300'}`}>{storm.name}</span>
+                                    {peakStatus && <span className={`text-xs font-bold ${isFocused ? 'text-cyan-400' : 'text-slate-500'}`}>{peakStatus}</span>}
+                                </div>
+                                <span className={`text-[10px] font-medium mt-0.5 ${isFocused ? 'text-slate-400' : 'text-slate-600'}`}>{storm.year} - {shortCat}</span>
+                            </div>
+                            
+                            <div className="flex items-center gap-1">
+                                <button 
+                                    onClick={(e) => handleCloseStorm(e, storm.id)}
+                                    className={`p-1 rounded-full hover:bg-slate-700 transition-colors ${isFocused ? 'text-slate-400 hover:text-white' : 'text-slate-600 hover:text-slate-300'}`}
+                                >
+                                    <svg xmlns="http://www.w3.org/2000/svg" className="h-3 w-3" viewBox="0 0 20 20" fill="currentColor">
+                                    <path fillRule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clipRule="evenodd" />
+                                    </svg>
+                                </button>
+                            </div>
+                        </div>
+                    );
+                })}
+
+                {/* Overflow / View Manager Button */}
+                {hiddenStorms.length > 0 && (
+                    <div className="relative h-full" ref={overflowMenuRef as any}>
+                        <button 
+                           onClick={() => setOverflowMenuOpen(!overflowMenuOpen)}
+                           className={`
+                                h-[46px] px-3 py-2 rounded-lg transition-colors flex items-center gap-1 shrink-0 border font-bold text-xs
+                                ${overflowMenuOpen ? 'bg-slate-800 text-cyan-400 border-cyan-500' : 'bg-slate-900/50 text-slate-400 border-slate-800 hover:text-cyan-400 hover:bg-slate-800/50'}
+                           `}
+                        >
+                            <span className="whitespace-nowrap">+{hiddenStorms.length} More</span>
+                            <svg className={`w-3 h-3 transition-transform ${overflowMenuOpen ? 'rotate-180' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                            </svg>
+                        </button>
+                        
+                        {/* Overflow View Manager */}
+                        {overflowMenuOpen && (
+                            <div className="absolute top-full right-0 mt-1 w-56 bg-slate-800 border border-slate-700 rounded-lg shadow-xl z-50 animate-fade-in flex flex-col max-h-80 overflow-y-auto custom-scrollbar">
+                                <div className="px-3 py-2 text-[10px] font-bold text-slate-500 uppercase bg-slate-900 sticky top-0 border-b border-slate-700/50">
+                                    View Manager
+                                </div>
+                                
+                                {activeStormIds.map((id, index) => {
+                                    const storm = storms.find(s => s.id === id);
+                                    if (!storm) return null;
+                                    
+                                    const isVisible = index < MAX_VIEW_STORMS;
+                                    const maxWind = Math.max(...storm.track.map(t => t.maxWind));
+                                    
+                                    // Status Logic
+                                    let peakCode = 'TD';
+                                    if (maxWind >= 64) peakCode = 'HU';
+                                    else if (maxWind >= 34) peakCode = 'TS';
+                                    const color = STORM_STATUS_COLORS[peakCode];
+
+                                    return (
+                                        <button
+                                            key={id}
+                                            onClick={() => handleToggleVisibility(id)}
+                                            className={`
+                                                w-full text-left px-3 py-1.5 border-b border-slate-700/50 last:border-0 flex items-center gap-2 transition-all group
+                                                ${isVisible 
+                                                    ? 'bg-cyan-950/30 border-l-2 border-l-cyan-400 pl-2.5' // Visual "Active" state
+                                                    : 'border-l-2 border-l-transparent pl-2.5 hover:bg-slate-800 opacity-60 hover:opacity-100' // Bank state
+                                                }
+                                            `}
+                                        >
+                                            <div className="w-1.5 h-1.5 rounded-full shrink-0" style={{ backgroundColor: color }}></div>
+                                            
+                                            <div className="flex-1 min-w-0 flex items-center justify-between">
+                                                <span className={`font-bold truncate text-xs ${isVisible ? 'text-white' : 'text-slate-400 group-hover:text-slate-200'}`}>
+                                                    {storm.name}
+                                                </span>
+                                                <span className="text-[9px] text-slate-600 font-mono ml-2">{storm.year}</span>
+                                            </div>
+                                        </button>
+                                    );
+                                })}
+                            </div>
+                        )}
+                    </div>
+                )}
+            </div>
+        )}
+
+        {/* Dashboard Content */}
+        <div className="space-y-10 animate-fade-in bg-slate-900/20 p-4 rounded-xl border border-slate-800/50">
+          {/* Top Row: Summary Stats (Focused Storm) */}
+          <StormSummary storm={focusedStorm} />
 
           {/* Middle Row: Map & Chart (Stacked Vertically now) */}
           <div className="flex flex-col gap-6">
             <div className="space-y-2 w-full">
-              <StormMap storm={selectedStorm} />
+              <StormMap 
+                  storms={visibleStorms} 
+                  focusedStormId={focusedStormId} 
+                  onStormFocus={setFocusedStormId}
+              />
             </div>
             <div className="space-y-2 w-full">
-              <StormChart storm={selectedStorm} />
+              <StormChart storm={focusedStorm} />
             </div>
           </div>
 
-          {/* Bottom Row: Data Table */}
-          <StormDataTable storm={selectedStorm} />
+          {/* Bottom Row: Data Table (Focused Storm) */}
+          <StormDataTable 
+              activeStorms={visibleStorms} 
+              focusedStormId={focusedStormId} 
+              onFocus={setFocusedStormId} 
+          />
         </div>
         
       </main>

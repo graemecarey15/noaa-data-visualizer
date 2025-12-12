@@ -3,13 +3,15 @@ import { Storm, StormDataPoint, WindRadii } from '../types';
 import { getStormPointColor, INTENSITY_COLORS, getCategoryLabel } from '../constants';
 
 interface StormMapProps {
-  storm?: Storm | null;
+  storms: Storm[]; // List of all active storms to render
+  focusedStormId?: string; // The specific storm selected for detailed inspection
+  onStormFocus?: (id: string) => void;
 }
 
 // Lightweight World Map GeoJSON URL (Reliable source)
 const GEOJSON_URL = "https://raw.githubusercontent.com/holtzy/D3-graph-gallery/master/DATA/world.geojson";
 
-const StormMap: React.FC<StormMapProps> = ({ storm }) => {
+const StormMap: React.FC<StormMapProps> = ({ storms, focusedStormId, onStormFocus }) => {
   const [worldData, setWorldData] = useState<any>(null);
   const [hoveredPoint, setHoveredPoint] = useState<StormDataPoint | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -64,35 +66,50 @@ const StormMap: React.FC<StormMapProps> = ({ storm }) => {
     }
   }, []);
 
-  // Reset Zoom when storm changes
-  useEffect(() => {
-    setViewState({ zoom: 1, panX: 0, panY: 0 });
-    setHoveredPoint(null);
-  }, [storm]);
+  // Identify Focused Storm Object
+  const focusedStorm = useMemo(() => storms.find(s => s.id === focusedStormId), [storms, focusedStormId]);
+
+  // Sort storms for render: Focused Last (Top), Background First (Bottom)
+  const renderSortedStorms = useMemo(() => {
+     return [...storms].sort((a, b) => {
+         if (a.id === focusedStormId) return 1;
+         if (b.id === focusedStormId) return -1;
+         return 0;
+     });
+  }, [storms, focusedStormId]);
 
   // --- MAP PROJECTION LOGIC ---
   const baseView = useMemo(() => {
-    if (!storm || storm.track.length === 0) return { x: -130, y: -60, w: 100, h: 60, pointRadius: 0.5 };
+    if (storms.length === 0) return { x: -130, y: -60, w: 100, h: 60, pointRadius: 0.5 };
 
-    const lats = storm.track.map(p => p.lat);
-    const lons = storm.track.map(p => p.lon);
+    // Calculate Bounds for ALL storms
+    let minLat = 90, maxLat = -90, minLon = 180, maxLon = -180;
+    let hasPoints = false;
 
-    let minLat = Math.min(...lats);
-    let maxLat = Math.max(...lats);
-    let minLon = Math.min(...lons);
-    let maxLon = Math.max(...lons);
+    storms.forEach(storm => {
+        storm.track.forEach(p => {
+            if (p.lat < minLat) minLat = p.lat;
+            if (p.lat > maxLat) maxLat = p.lat;
+            if (p.lon < minLon) minLon = p.lon;
+            if (p.lon > maxLon) maxLon = p.lon;
+            hasPoints = true;
+        });
+    });
 
-    const padding = 15; 
+    if (!hasPoints) return { x: -130, y: -60, w: 100, h: 60, pointRadius: 0.5 };
+
+    const padding = 10; 
     
-    if (maxLat - minLat < 20) {
+    // Safety check for single point or tight clusters
+    if (maxLat - minLat < 10) {
       const center = (maxLat + minLat) / 2;
-      minLat = center - 10;
-      maxLat = center + 10;
+      minLat = center - 5;
+      maxLat = center + 5;
     }
-    if (maxLon - minLon < 20) {
+    if (maxLon - minLon < 10) {
       const center = (maxLon + minLon) / 2;
-      minLon = center - 10;
-      maxLon = center + 10;
+      minLon = center - 5;
+      maxLon = center + 5;
     }
 
     minLat -= padding;
@@ -103,6 +120,7 @@ const StormMap: React.FC<StormMapProps> = ({ storm }) => {
     const w = maxLon - minLon;
     const h = maxLat - minLat;
 
+    // Adjust point radius based on scale
     return {
       x: minLon,
       y: -maxLat,
@@ -110,24 +128,59 @@ const StormMap: React.FC<StormMapProps> = ({ storm }) => {
       h: h,
       pointRadius: Math.max(0.2, w / 150)
     };
-  }, [storm]);
+  }, [storms]);
+
+  // --- ZOOM LOGIC HELPER ---
+  const fitToStorm = (stormId: string) => {
+    const storm = storms.find(s => s.id === stormId);
+    if (!storm || storm.track.length === 0) return;
+
+    let minLat = 90, maxLat = -90, minLon = 180, maxLon = -180;
+    storm.track.forEach(p => {
+        if (p.lat < minLat) minLat = p.lat;
+        if (p.lat > maxLat) maxLat = p.lat;
+        if (p.lon < minLon) minLon = p.lon;
+        if (p.lon > maxLon) maxLon = p.lon;
+    });
+
+    const latPad = Math.max(5, (maxLat - minLat) * 0.5); 
+    const lonPad = Math.max(5, (maxLon - minLon) * 0.5);
+    
+    const targetW = (maxLon + lonPad) - (minLon - lonPad);
+    const targetH = (maxLat + latPad) - (minLat - latPad);
+    
+    const targetCenterX = (minLon + maxLon) / 2;
+    const targetCenterY = -((minLat + maxLat) / 2); 
+
+    const zoomX = baseView.w / targetW;
+    const zoomY = baseView.h / targetH;
+    const newZoom = Math.min(Math.min(zoomX, zoomY), 30); 
+
+    const baseCenterX = baseView.x + baseView.w / 2;
+    const baseCenterY = baseView.y + baseView.h / 2;
+
+    const newPanX = targetCenterX - baseCenterX;
+    const newPanY = targetCenterY - baseCenterY;
+
+    setViewState({
+        zoom: newZoom,
+        panX: newPanX,
+        panY: newPanY
+    });
+  };
 
   const viewBoxString = useMemo(() => {
     const currentW = baseView.w / viewState.zoom;
     const currentH = baseView.h / viewState.zoom;
     
-    const currentX = baseView.x + viewState.panX + (baseView.w - currentW) / 2;
-    const currentY = baseView.y + viewState.panY + (baseView.h - currentH) / 2;
-
-    return `${currentX} ${currentY} ${currentW} ${currentH}`;
+    return `${baseView.x + viewState.panX + (baseView.w - currentW) / 2} ${baseView.y + viewState.panY + (baseView.h - currentH) / 2} ${currentW} ${currentH}`;
   }, [baseView, viewState]);
+  
 
   // --- EVENT HANDLERS ---
   const handleZoomIn = () => setViewState(prev => ({ ...prev, zoom: Math.min(prev.zoom * 1.5, 50) }));
   
-  // Restrict zoom out to prevent "world view" explosion issues
   const handleZoomOut = () => setViewState(prev => {
-     // Ensure we don't zoom out wider than 360 degrees logic or simple 0.2 limit
      const minZoom = Math.max(0.2, baseView.w / 180); 
      return { ...prev, zoom: Math.max(prev.zoom / 1.5, minZoom) };
   });
@@ -189,14 +242,11 @@ const StormMap: React.FC<StormMapProps> = ({ storm }) => {
   
   const nmToDegLat = (nm: number) => {
     if (!nm || !isFinite(nm)) return 0;
-    // 1 degree lat ~= 60 nm
     return Math.min(Math.abs(nm) / 60, MAX_RADIUS_DEG);
   };
   
   const nmToDegLon = (nm: number, lat: number) => {
     if (!nm || !isFinite(nm)) return 0;
-    // Protect against polar distortion (infinity) and zero division
-    // Clamp lat to -85..85 to avoid massive distortion
     const safeLat = Math.max(-85, Math.min(85, lat));
     const cosLat = Math.max(0.05, Math.abs(Math.cos(safeLat * Math.PI / 180)));
     const deg = Math.abs(nm) / (60 * cosLat);
@@ -233,7 +283,6 @@ const StormMap: React.FC<StormMapProps> = ({ storm }) => {
   const isCoordsValid = !isNaN(cx) && !isNaN(cy) && isFinite(cx) && isFinite(cy);
 
   // Use a unique key for the wind group to force re-render on hover change
-  // This prevents React/Browser from interpolating between two unrelated ellipses (flying effect)
   const windGroupKey = activeStructurePoint ? `wind-${activeStructurePoint.datetime}-${activeStructurePoint.lat}-${activeStructurePoint.lon}` : 'wind-none';
 
   return (
@@ -241,9 +290,11 @@ const StormMap: React.FC<StormMapProps> = ({ storm }) => {
       
       {/* Header Overlay */}
       <div className="absolute top-2 left-4 z-10 pointer-events-none">
-        <h3 className="text-slate-200 font-bold text-lg drop-shadow-md">{storm ? storm.name : "Global View"} {storm ? "Track" : ""}</h3>
+        <h3 className="text-slate-200 font-bold text-lg drop-shadow-md">
+            {focusedStorm ? focusedStorm.name : (storms.length > 0 ? `${storms.length} Storms Active` : 'Global View')}
+        </h3>
         <p className="text-slate-400 text-xs drop-shadow-md">
-           {storm && storm.track.length > 0 ? `${storm.track[0].date} - ${storm.track[storm.track.length-1].date}` : storm ? 'No Data' : 'No Storm Selected'}
+           {focusedStorm && focusedStorm.track.length > 0 ? `${focusedStorm.track[0].date} - ${focusedStorm.track[focusedStorm.track.length-1].date}` : ''}
         </p>
       </div>
 
@@ -278,10 +329,8 @@ const StormMap: React.FC<StormMapProps> = ({ storm }) => {
          )}
       </div>
 
-      {/* Collapsible Legend Overlay */}
+      {/* Legend */}
       <div className="absolute bottom-4 left-4 z-10 flex flex-col items-start gap-2 max-w-[200px] pointer-events-none">
-         
-         {/* Toggle Button (Visible when hidden) */}
          {!showLegend && (
             <button 
                 onClick={() => setShowLegend(true)}
@@ -293,8 +342,6 @@ const StormMap: React.FC<StormMapProps> = ({ storm }) => {
                 </svg>
             </button>
          )}
-
-         {/* Legend Content */}
          {showLegend && (
              <div className="pointer-events-auto bg-slate-900/90 backdrop-blur p-3 rounded-lg border border-slate-700 shadow-xl animate-fade-in">
                 <div className="flex justify-between items-center mb-2 border-b border-slate-700 pb-2">
@@ -309,23 +356,14 @@ const StormMap: React.FC<StormMapProps> = ({ storm }) => {
                        </svg>
                     </button>
                 </div>
-                
                 <div className="flex flex-col gap-1.5 text-[10px] text-slate-300 font-medium">
-                    <div className="flex items-center"><span className="w-3 h-3 rounded-sm mr-2" style={{background: INTENSITY_COLORS.CAT5}}></span> Category 5 (&ge;137kt)</div>
-                    <div className="flex items-center"><span className="w-3 h-3 rounded-sm mr-2" style={{background: INTENSITY_COLORS.CAT4}}></span> Category 4</div>
-                    <div className="flex items-center"><span className="w-3 h-3 rounded-sm mr-2" style={{background: INTENSITY_COLORS.CAT3}}></span> Category 3</div>
-                    <div className="flex items-center"><span className="w-3 h-3 rounded-sm mr-2" style={{background: INTENSITY_COLORS.CAT2}}></span> Category 2</div>
-                    <div className="flex items-center"><span className="w-3 h-3 rounded-sm mr-2" style={{background: INTENSITY_COLORS.CAT1}}></span> Category 1</div>
+                    <div className="flex items-center"><span className="w-3 h-3 rounded-sm mr-2" style={{background: INTENSITY_COLORS.CAT5}}></span> Cat 5 (&ge;137kt)</div>
+                    <div className="flex items-center"><span className="w-3 h-3 rounded-sm mr-2" style={{background: INTENSITY_COLORS.CAT4}}></span> Cat 4</div>
+                    <div className="flex items-center"><span className="w-3 h-3 rounded-sm mr-2" style={{background: INTENSITY_COLORS.CAT3}}></span> Cat 3</div>
+                    <div className="flex items-center"><span className="w-3 h-3 rounded-sm mr-2" style={{background: INTENSITY_COLORS.CAT2}}></span> Cat 2</div>
+                    <div className="flex items-center"><span className="w-3 h-3 rounded-sm mr-2" style={{background: INTENSITY_COLORS.CAT1}}></span> Cat 1</div>
                     <div className="flex items-center"><span className="w-3 h-3 rounded-sm mr-2" style={{background: INTENSITY_COLORS.TS}}></span> Tropical Storm</div>
                     <div className="flex items-center"><span className="w-3 h-3 rounded-sm mr-2" style={{background: INTENSITY_COLORS.TD}}></span> Depression</div>
-                    {layers.windStructure && (
-                        <>
-                        <div className="h-px bg-slate-700 my-1"></div>
-                        <div className="flex items-center"><span className="w-3 h-3 rounded-full mr-2 border border-emerald-500 bg-emerald-500/20"></span> 34kt Max Extent</div>
-                        <div className="flex items-center"><span className="w-3 h-3 rounded-full mr-2 border border-yellow-500 bg-yellow-500/20"></span> 50kt Max Extent</div>
-                        <div className="flex items-center"><span className="w-3 h-3 rounded-full mr-2 border border-rose-500 bg-rose-500/20"></span> 64kt Max Extent</div>
-                        </>
-                    )}
                 </div>
              </div>
          )}
@@ -333,7 +371,7 @@ const StormMap: React.FC<StormMapProps> = ({ storm }) => {
 
       {/* Zoom Controls */}
       <div className="absolute bottom-4 right-4 z-20 flex flex-col gap-2">
-        <button onClick={handleReset} className="bg-slate-800 hover:bg-slate-700 text-slate-300 p-2 rounded shadow-lg border border-slate-600 transition-colors" title="Reset to Storm">
+        <button onClick={handleReset} className="bg-slate-800 hover:bg-slate-700 text-slate-300 p-2 rounded shadow-lg border border-slate-600 transition-colors" title="Reset View">
            <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
            </svg>
@@ -384,22 +422,45 @@ const StormMap: React.FC<StormMapProps> = ({ storm }) => {
             ))}
           </g>
 
-          {/* 2. Storm Track Line */}
-          {layers.track && storm && (
-            <polyline
-                points={storm.track.map(p => `${p.lon},${-p.lat}`).join(" ")}
-                fill="none"
-                stroke="#64748b"
-                strokeWidth={visiblePointRadius * 0.5}
-                strokeDasharray={`${visiblePointRadius}, ${visiblePointRadius}`}
-                opacity={0.4}
-            />
-          )}
+          {/* 2. Storm Track Lines (Draw All) */}
+          {layers.track && renderSortedStorms.map(storm => {
+             const isFocused = storm.id === focusedStormId;
+             
+             return (
+                <g 
+                    key={storm.id} 
+                    onClick={(e) => {
+                        e.stopPropagation();
+                        onStormFocus?.(storm.id);
+                        fitToStorm(storm.id);
+                    }}
+                    className="cursor-pointer group"
+                >
+                    {/* Invisible Hit Area (Wider) for easier clicking */}
+                    <polyline
+                        points={storm.track.map(p => `${p.lon},${-p.lat}`).join(" ")}
+                        fill="none"
+                        stroke="transparent"
+                        strokeWidth={visiblePointRadius * 2} 
+                        className="pointer-events-auto"
+                    />
+                    {/* Visible Line */}
+                    <polyline
+                        points={storm.track.map(p => `${p.lon},${-p.lat}`).join(" ")}
+                        fill="none"
+                        stroke={isFocused ? "#94a3b8" : "#475569"} 
+                        strokeWidth={isFocused ? visiblePointRadius * 0.5 : visiblePointRadius * 0.3}
+                        strokeDasharray={isFocused ? `${visiblePointRadius}, ${visiblePointRadius}` : "0"}
+                        opacity={isFocused ? 0.8 : 0.4}
+                        className={`transition-all duration-300 ${!isFocused ? 'group-hover:stroke-slate-400 group-hover:opacity-80' : ''}`}
+                    />
+                </g>
+             );
+          })}
 
-          {/* 3. Wind Field Layer (Dynamic: Hovered Only) - Circular Approximation */}
+          {/* 3. Wind Field Layer (Dynamic: Hovered Only) */}
           {layers.windStructure && activeStructurePoint && isCoordsValid && activeStructurePoint.radii && hasRadii(activeStructurePoint.radii) && (
               <g key={windGroupKey} className="wind-field-layer pointer-events-none opacity-100">
-                 {/* 34kt */}
                  {getMaxRad(activeStructurePoint.radii, '34') > 0 && (
                      <ellipse 
                         cx={cx}
@@ -411,7 +472,6 @@ const StormMap: React.FC<StormMapProps> = ({ storm }) => {
                         strokeWidth={visiblePointRadius * 0.2}
                      />
                  )}
-                 {/* 50kt */}
                  {getMaxRad(activeStructurePoint.radii, '50') > 0 && (
                      <ellipse 
                         cx={cx}
@@ -423,7 +483,6 @@ const StormMap: React.FC<StormMapProps> = ({ storm }) => {
                         strokeWidth={visiblePointRadius * 0.2}
                      />
                  )}
-                 {/* 64kt */}
                  {getMaxRad(activeStructurePoint.radii, '64') > 0 && (
                      <ellipse 
                         cx={cx}
@@ -439,32 +498,65 @@ const StormMap: React.FC<StormMapProps> = ({ storm }) => {
           )}
 
           {/* 4. Storm Points */}
-          {layers.points && storm && storm.track.map((p, i) => {
-            const pointColor = getStormPointColor(p.maxWind, p.status);
-            // Highlight the hovered point
-            const isHovered = activeStructurePoint === p;
-            
-            return (
-              <circle
-                key={i}
-                cx={p.lon}
-                cy={-p.lat}
-                r={p.recordIdentifier === 'L' ? visiblePointRadius * 1.5 : visiblePointRadius}
-                fill={pointColor}
-                stroke={isHovered ? '#fff' : (p.recordIdentifier === 'L' ? '#10b981' : 'transparent')}
-                strokeWidth={isHovered ? visiblePointRadius * 0.4 : visiblePointRadius * 0.3}
-                strokeOpacity={isHovered ? 0.8 : 1}
-                className="hover:opacity-100 cursor-pointer hover:stroke-white/50"
-                onMouseEnter={() => setHoveredPoint(p)}
-                onMouseLeave={() => setHoveredPoint(null)}
-              />
-            );
+          {layers.points && renderSortedStorms.map(storm => {
+             const isFocused = storm.id === focusedStormId;
+             
+             if (!isFocused) {
+                 return (
+                    <g 
+                        key={storm.id} 
+                        onClick={(e) => {
+                            e.stopPropagation();
+                            onStormFocus?.(storm.id);
+                            fitToStorm(storm.id);
+                        }}
+                        className="cursor-pointer"
+                    >
+                         {storm.track.map((p, i) => (
+                            <circle 
+                                key={`${storm.id}-${i}`}
+                                cx={p.lon}
+                                cy={-p.lat}
+                                r={visiblePointRadius * 0.4}
+                                fill={getStormPointColor(p.maxWind, p.status)}
+                                opacity={0.4}
+                                className="hover:opacity-100 transition-opacity"
+                            />
+                         ))}
+                    </g>
+                 );
+             }
+
+             // Focused storm points get detailed interaction (Tooltip hover, etc)
+             return storm.track.map((p, i) => {
+                const pointColor = getStormPointColor(p.maxWind, p.status);
+                const isHovered = activeStructurePoint === p;
+                
+                return (
+                  <circle
+                    key={`${storm.id}-${i}`}
+                    cx={p.lon}
+                    cy={-p.lat}
+                    r={p.recordIdentifier === 'L' ? visiblePointRadius * 1.5 : visiblePointRadius}
+                    fill={pointColor}
+                    stroke={isHovered ? '#fff' : (p.recordIdentifier === 'L' ? '#10b981' : 'transparent')}
+                    strokeWidth={isHovered ? visiblePointRadius * 0.4 : visiblePointRadius * 0.3}
+                    strokeOpacity={isHovered ? 0.8 : 1}
+                    className="hover:opacity-100 cursor-pointer hover:stroke-white/50"
+                    onMouseEnter={() => setHoveredPoint(p)}
+                    onMouseLeave={() => setHoveredPoint(null)}
+                    onClick={(e) => {
+                        e.stopPropagation();
+                        fitToStorm(storm.id);
+                    }}
+                  />
+                );
+             });
           })}
 
           {/* 5. Highlighted Point Ring (Hover) */}
           {hoveredPoint && !isNaN(hoveredPoint.lon) && !isNaN(hoveredPoint.lat) && (
              <g key={`highlight-${hoveredPoint.datetime}`}>
-                {/* Static Ring for visibility */}
                 <circle 
                     cx={hoveredPoint.lon}
                     cy={-hoveredPoint.lat}
