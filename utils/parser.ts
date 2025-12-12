@@ -1,5 +1,6 @@
 
-import { Storm, StormDataPoint } from '../types';
+
+import { Storm, StormDataPoint, WindRadii } from '../types';
 
 const parseCoordinate = (coord: string): number => {
   if (!coord) return 0;
@@ -18,8 +19,6 @@ const parseCoordinate = (coord: string): number => {
     
     // ATCF Standard often uses "221N" for 22.1N (implied tenths)
     // If there is NO decimal point, and it's 3+ digits, likely tenths.
-    // However, older formats or HURDAT might use decimals.
-    // Heuristic: If it has no dot, assume tenths.
     if (!numPart.includes('.')) {
         value = value / 10;
     }
@@ -81,11 +80,8 @@ const isGenericName = (name: string): boolean => {
 };
 
 // ATCF (B-Deck) Parser Logic
+// This now strictly handles the raw NHC format found in FTP b-decks
 const parseAtcf = (lines: string[]): Storm[] => {
-  // First, group lines by Basin + Cyclone Number (e.g. "AL09")
-  // This is critical for storms that cross years (e.g. Dec 31 -> Jan 1)
-  // We want to keep them as ONE storm ID based on the start year.
-  
   const rawGroups = new Map<string, string[]>();
   
   for (const line of lines) {
@@ -104,106 +100,123 @@ const parseAtcf = (lines: string[]): Storm[] => {
   const storms: Storm[] = [];
 
   rawGroups.forEach((groupLines, groupKey) => {
-      // Determine the Season Year from the first valid line
-      // This ID will persist for the whole group
       let seasonYear = 0;
-      const track: StormDataPoint[] = [];
+      
+      // We use a map to handle duplicates lines for the same time (e.g. diff radii)
+      const pointMap = new Map<string, StormDataPoint>();
       let stormName = 'UNNAMED';
       
-      // Temporary loop to find year/name
+      // Pass 1: Determine Year and Name
       for (const line of groupLines) {
          const parts = line.split(',').map(p => p.trim());
          if (parts.length < 8) continue;
          
          const col2 = parts[2];
-         const isStandardAtcf = col2 && col2.length === 10;
          
-         let yearRaw = '';
-         if (isStandardAtcf) {
-             yearRaw = col2.substring(0, 4);
+         // Standard ATCF: Column 2 is Date (YYYYMMDDHH)
+         if (col2 && col2.length === 10) {
+             const yearRaw = col2.substring(0, 4);
+             if (seasonYear === 0 && yearRaw) seasonYear = parseInt(yearRaw, 10);
              
-             // Check name in col 27 (Standard)
+             // Check Name columns
              if (parts[27] && isNaN(parseInt(parts[27])) && !isGenericName(parts[27])) {
                  stormName = parts[27];
+             } else if (parts[23] && !isGenericName(parts[23])) {
+                 stormName = parts[23]; // Fallback
              }
-         } else {
-             yearRaw = parts[2]; // Custom format
-             
-             // Check name in col 23 (Custom)
-             if (parts[23] && isNaN(parseInt(parts[23])) && !isGenericName(parts[23])) {
-                 stormName = parts[23];
-             }
-         }
-         
-         if (seasonYear === 0 && yearRaw) {
-             seasonYear = parseInt(yearRaw, 10);
          }
       }
       
-      if (seasonYear === 0) return; // Should not happen
+      if (seasonYear === 0) return;
       
-      const stormId = `${groupKey}${seasonYear}`;
-      if (stormName === 'UNNAMED') stormName = `STORM ${groupKey.substring(2)}`;
-
-      // Parse points
+      // Pass 2: Parse Data
       for (const line of groupLines) {
         const parts = line.split(',').map(p => p.trim());
         if (parts.length < 8) continue;
 
-        const col2 = parts[2];
-        const isStandardAtcf = col2 && col2.length === 10;
+        // Standard ATCF Format Expected
+        // 0:Basin, 1:CY, 2:Date, 3:Tech, 4:Tau, 5:Lat, 6:Lon, 7:Wind, 8:Pres, 9:Status, 10:RadCode...
         
-        let rawDate, latStr, lonStr, windStr, pressureStr, status, recordIdentifier;
-
-        if (isStandardAtcf) {
-            // Standard ATCF Format (NHC FTP)
-            // 0: Basin, 1: Cy, 2: YYYYMMDDHH, 3: Min/Filler, 4: Tech(BEST), 5: Tau, 6: Lat, 7: Lon, 8: Wind, 9: Pres, 10: Type
-            rawDate = col2; 
-            latStr = parts[6];
-            lonStr = parts[7];
-            windStr = parts[8];
-            pressureStr = parts[9];
-            status = parts[10]; // Usually col 10 for Type (TD, TS, etc)
-            recordIdentifier = ''; 
-        } else {
-            // Custom Preloaded Format (constants.ts)
-            // 0: Basin, 1: Cy, 2: Year, 3: Tech, 4: Tau, 5: YYYYMMDDHH, 6: RecID, 7: Status, 8: Lat, 9: Lon, 10: Wind, 11: Pres
-            rawDate = parts[5];
-            latStr = parts[8];
-            lonStr = parts[9];
-            windStr = parts[10];
-            pressureStr = parts[11];
-            status = parts[7];
-            recordIdentifier = parts[6];
-        }
+        // Note: The previous "Custom Preloaded Format" branch has been removed.
+        // All preloaded data is now in HURDAT2 format and handled by parseStandardHurdat.
         
-        if (!rawDate || rawDate.length < 10) continue;
+        const rawDate = parts[2]; 
+        if (!rawDate || rawDate.length !== 10) continue;
 
+        // Mapping based on typical B-Deck columns from NHC FTP
+        // Some files vary slightly, but Lat/Lon usually 6/7 or 5/6 depending on if there's a filler
+        // Adjusting index based on standard spec:
+        // Basin, Cy, YYYYMMDDHH, Tech, Tau, Lat, Lon, Vmax, MSLP, TY
+        // AL, 01, 2024061912, BEST,   0, 222N,  951W,   35, 1002, TS
+        
+        const latStr = parts[6];
+        const lonStr = parts[7];
+        const windStr = parts[8];
+        const pressureStr = parts[9];
+        const status = parts[10];
+
+        // ATCF Structural Data
+        let windCode = 0;
+        let ne = 0, se = 0, sw = 0, nw = 0;
+        let rmwVal = 0;
+        
+        if (parts[11]) windCode = parseInt(parts[11], 10);
+        if (parts[13]) ne = parseInt(parts[13], 10);
+        if (parts[14]) se = parseInt(parts[14], 10);
+        if (parts[15]) sw = parseInt(parts[15], 10);
+        if (parts[16]) nw = parseInt(parts[16], 10);
+        if (parts[19]) rmwVal = parseInt(parts[19], 10);
+        
         const dateStr = rawDate.substring(0, 8);
         const timeStr = rawDate.substring(8, 10) + '00';
         const { iso, formatted } = parseDate(dateStr, timeStr);
+        const timeKey = iso;
 
-        // Filter out bad coordinates
-        if (!latStr || !lonStr) continue;
+        // Create or Update Point
+        let point = pointMap.get(timeKey);
+        
+        if (!point) {
+            if (!latStr || !lonStr) continue;
+            point = {
+                date: formatted,
+                time: timeStr,
+                datetime: iso,
+                recordIdentifier: '',
+                status: status || '',
+                lat: parseCoordinate(latStr),
+                lon: parseCoordinate(lonStr),
+                maxWind: parseInt(windStr, 10) || 0,
+                minPressure: parseInt(pressureStr, 10) === -999 ? 0 : (parseInt(pressureStr, 10) || 0),
+                originalLat: latStr,
+                originalLon: lonStr,
+                radii: { ne34:0, se34:0, sw34:0, nw34:0, ne50:0, se50:0, sw50:0, nw50:0, ne64:0, se64:0, sw64:0, nw64:0 }
+            };
+            pointMap.set(timeKey, point);
+        }
 
-        const point: StormDataPoint = {
-          date: formatted,
-          time: timeStr,
-          datetime: iso,
-          recordIdentifier: recordIdentifier || '',
-          status: status || '',
-          lat: parseCoordinate(latStr),
-          lon: parseCoordinate(lonStr),
-          maxWind: parseInt(windStr, 10) || 0,
-          minPressure: parseInt(pressureStr, 10) === -999 ? 0 : (parseInt(pressureStr, 10) || 0),
-          originalLat: latStr,
-          originalLon: lonStr,
-        };
-        track.push(point);
+        // Merge Structural Data
+        if (rmwVal > 0) point.rmw = rmwVal;
+        
+        // Standard ATCF Multi-row Logic
+        if (point.radii) {
+            if (windCode === 34) {
+                point.radii.ne34 = ne; point.radii.se34 = se; point.radii.sw34 = sw; point.radii.nw34 = nw;
+            } else if (windCode === 50) {
+                point.radii.ne50 = ne; point.radii.se50 = se; point.radii.sw50 = sw; point.radii.nw50 = nw;
+            } else if (windCode === 64) {
+                point.radii.ne64 = ne; point.radii.se64 = se; point.radii.sw64 = sw; point.radii.nw64 = nw;
+            }
+        }
       }
+      
+      const track = Array.from(pointMap.values());
       
       if (track.length > 0) {
           track.sort((a, b) => a.datetime.localeCompare(b.datetime));
+          
+          const stormId = `${groupKey}${seasonYear}`;
+          if (stormName === 'UNNAMED') stormName = `STORM ${groupKey.substring(2)}`;
+
           storms.push({
              id: stormId,
              name: stormName,
@@ -219,6 +232,7 @@ const parseAtcf = (lines: string[]): Storm[] => {
 
 
 // Standard HURDAT2 Parser
+// Handles both historical archives and our preloaded data constants
 const parseStandardHurdat = (lines: string[]): Storm[] => {
   const stormMap = new Map<string, Storm>();
   let currentStormId: string | null = null;
@@ -227,7 +241,7 @@ const parseStandardHurdat = (lines: string[]): Storm[] => {
     const parts = line.split(',').map(p => p ? p.trim() : '');
     if (parts.length === 0) continue;
 
-    // Header Check: AL092011, IRENE, 15
+    // Header Detection (e.g., AL092011)
     const isHeader = parts[0].length === 8 && /^[A-Z]{2}\d{6}/.test(parts[0]) && parts.length < 10;
 
     if (isHeader) {
@@ -249,7 +263,6 @@ const parseStandardHurdat = (lines: string[]): Storm[] => {
       continue;
     }
 
-    // Data Row
     if (currentStormId && parts.length >= 4) {
       const storm = stormMap.get(currentStormId)!;
 
@@ -263,6 +276,30 @@ const parseStandardHurdat = (lines: string[]): Storm[] => {
       const pressureStr = parts[7];
 
       if (!dateStr || !latStr || !lonStr) continue;
+
+      let radii: WindRadii | undefined;
+      let rmw: number | undefined;
+
+      // Extract Structure Data if available (Cols 8-20)
+      if (parts.length >= 20) {
+          const p = (idx: number) => parseInt(parts[idx], 10) || 0;
+          
+          // Check if any radii data exists
+          if (p(8) > 0 || p(9) > 0 || p(10) > 0 || p(11) > 0 ||
+              p(12) > 0 || p(13) > 0 || p(14) > 0 || p(15) > 0 ||
+              p(16) > 0 || p(17) > 0 || p(18) > 0 || p(19) > 0) {
+              
+              radii = {
+                  ne34: p(8), se34: p(9), sw34: p(10), nw34: p(11),
+                  ne50: p(12), se50: p(13), sw50: p(14), nw50: p(15),
+                  ne64: p(16), se64: p(17), sw64: p(18), nw64: p(19),
+              };
+          }
+          if (parts[20]) {
+              const r = parseInt(parts[20], 10);
+              if (r > 0) rmw = r;
+          }
+      }
 
       const { iso, formatted } = parseDate(dateStr, timeStr);
       
@@ -278,6 +315,8 @@ const parseStandardHurdat = (lines: string[]): Storm[] => {
         minPressure: parseInt(pressureStr, 10) === -999 ? 0 : (parseInt(pressureStr, 10) || 0),
         originalLat: latStr,
         originalLon: lonStr,
+        radii,
+        rmw
       };
 
       storm.track.push(point);
@@ -299,10 +338,8 @@ export const parseHurdat2 = (rawData: string): Storm[] => {
   const lines = rawData.replace(/\r\n/g, '\n').split('\n').map(l => l.trim()).filter(l => l.length > 0);
   if (lines.length === 0) return [];
 
-  // Detect Format
-  // ATCF usually starts with "AL, 01, 2020" or similar.
-  // Relaxed regex: 2 letters, comma, 1-2 digits, comma/date
   const firstLine = lines[0];
+  // Detection: HURDAT2 always starts with header like AL092011. ATCF starts with AL, 09...
   const isAtcf = /^[A-Za-z]{2}\s*,\s*\d{1,2}\s*,/.test(firstLine);
 
   if (isAtcf) {

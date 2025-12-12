@@ -1,4 +1,5 @@
-import React from 'react';
+
+import React, { useState } from 'react';
 import { Storm } from '../types';
 import { STORM_STATUS_COLORS } from '../constants';
 
@@ -6,8 +7,39 @@ interface StormDataTableProps {
   storm: Storm;
 }
 
+const HeaderTooltip: React.FC<{ label: string; tooltip: string; align?: 'left' | 'right' | 'center' }> = ({ label, tooltip, align = 'left' }) => (
+  <th className={`px-4 py-3 ${align === 'right' ? 'text-right' : align === 'center' ? 'text-center' : 'text-left'} group relative cursor-help`}>
+    <span className="border-b border-dotted border-slate-600 hover:border-cyan-400 transition-colors">{label}</span>
+    
+    {/* Tooltip Popup: Rendered BELOW the header (top-full) to avoid overflow clipping */}
+    <div className={`
+      absolute top-full mt-2 w-48 bg-slate-800 text-slate-200 text-[10px] p-2 rounded shadow-xl border border-slate-600 
+      opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-50 font-normal normal-case leading-relaxed
+      ${align === 'right' ? 'right-0' : 'left-1/2 -translate-x-1/2'}
+    `}>
+      {tooltip}
+      {/* Arrow pointing UP */}
+      <div className={`
+        absolute bottom-full w-0 h-0 border-4 border-transparent border-b-slate-600
+        ${align === 'right' ? 'right-4' : 'left-1/2 -translate-x-1/2'}
+      `}></div>
+    </div>
+  </th>
+);
+
 const StormDataTable: React.FC<StormDataTableProps> = ({ storm }) => {
-  
+  const [showMenu, setShowMenu] = useState(false);
+  const [visibleColumns, setVisibleColumns] = useState({
+     rmw: true,
+     size34: true,
+     size50: false, // Default Hidden
+     size64: false  // Default Hidden
+  });
+
+  const toggleColumn = (key: keyof typeof visibleColumns) => {
+     setVisibleColumns(prev => ({ ...prev, [key]: !prev[key] }));
+  };
+
   const getWindIntensityColor = (wind: number) => {
     if (wind >= 137) return 'bg-purple-500/30 text-purple-200'; // Cat 5
     if (wind >= 113) return 'bg-red-500/30 text-red-200'; // Cat 4
@@ -29,39 +61,135 @@ const StormDataTable: React.FC<StormDataTableProps> = ({ storm }) => {
     }
   };
 
+  const getMaxRad = (radii: any, key: 'ne34' | 'ne50' | 'ne64') => {
+     if (!radii) return 0;
+     // Map ne34 -> ne34, se34, sw34, nw34
+     const suffix = key.substring(2);
+     return Math.max(
+        radii[`ne${suffix}`] || 0,
+        radii[`se${suffix}`] || 0,
+        radii[`sw${suffix}`] || 0,
+        radii[`nw${suffix}`] || 0
+     );
+  };
+
   return (
-    <div className="w-full bg-slate-900/50 rounded-xl border border-slate-700 overflow-hidden shadow-lg backdrop-blur-sm">
+    <div className="w-full bg-slate-900/50 rounded-xl border border-slate-700 overflow-visible shadow-lg backdrop-blur-sm relative">
       <div className="p-4 border-b border-slate-700 bg-slate-800/50 flex justify-between items-center">
         <h3 className="text-slate-300 font-semibold text-sm uppercase tracking-wider">Detailed Data Log</h3>
-        <span className="text-xs text-slate-500 font-mono">{storm.dataCount} Records</span>
+        <div className="flex items-center gap-3 relative">
+            <span className="text-xs text-slate-500 font-mono">{storm.dataCount} Records</span>
+            
+            <button 
+                onClick={() => setShowMenu(!showMenu)}
+                className={`text-slate-500 hover:text-cyan-400 transition-colors p-1 rounded hover:bg-slate-700/50 ${showMenu ? 'text-cyan-400 bg-slate-700/50' : ''}`}
+                title="Table Settings"
+            >
+                <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                </svg>
+            </button>
+
+            {/* Column Toggle Menu */}
+            {showMenu && (
+                <div className="absolute top-full right-0 mt-2 w-48 bg-slate-800 border border-slate-600 rounded-lg shadow-xl z-50 p-2 animate-fade-in">
+                    <h4 className="text-[10px] uppercase font-bold text-slate-500 mb-2 px-2">Columns</h4>
+                    <label className="flex items-center gap-2 px-2 py-1.5 hover:bg-slate-700 rounded cursor-pointer text-xs text-slate-300">
+                        <input type="checkbox" checked={visibleColumns.rmw} onChange={() => toggleColumn('rmw')} className="rounded bg-slate-900 border-slate-600 accent-cyan-500" />
+                        RMW (Radius Max Wind)
+                    </label>
+                    <label className="flex items-center gap-2 px-2 py-1.5 hover:bg-slate-700 rounded cursor-pointer text-xs text-slate-300">
+                        <input type="checkbox" checked={visibleColumns.size34} onChange={() => toggleColumn('size34')} className="rounded bg-slate-900 border-slate-600 accent-cyan-500" />
+                        Size (34kt / Tropical)
+                    </label>
+                    <label className="flex items-center gap-2 px-2 py-1.5 hover:bg-slate-700 rounded cursor-pointer text-xs text-slate-300">
+                        <input type="checkbox" checked={visibleColumns.size50} onChange={() => toggleColumn('size50')} className="rounded bg-slate-900 border-slate-600 accent-cyan-500" />
+                        Size (50kt / Storm)
+                    </label>
+                    <label className="flex items-center gap-2 px-2 py-1.5 hover:bg-slate-700 rounded cursor-pointer text-xs text-slate-300">
+                        <input type="checkbox" checked={visibleColumns.size64} onChange={() => toggleColumn('size64')} className="rounded bg-slate-900 border-slate-600 accent-cyan-500" />
+                        Size (64kt / Hurricane)
+                    </label>
+                </div>
+            )}
+        </div>
       </div>
       
-      <div className="overflow-x-auto max-h-[500px] overflow-y-auto">
+      <div className="overflow-x-auto max-h-[500px] overflow-y-auto custom-scrollbar rounded-b-xl">
         <table className="w-full text-left text-sm text-slate-400">
           <thead className="bg-slate-800 text-xs uppercase font-medium text-slate-300 sticky top-0 z-10 shadow-sm">
             <tr>
-              <th className="px-4 py-3">Date / Time</th>
-              <th className="px-4 py-3">Event</th>
-              <th className="px-4 py-3">Status</th>
-              <th className="px-4 py-3">Location</th>
-              <th className="px-4 py-3 text-right">Wind (kts)</th>
-              <th className="px-4 py-3 text-right">Pressure (mb)</th>
+              <HeaderTooltip 
+                label="Date / Time" 
+                tooltip="Date and Time (UTC) of the observation." 
+              />
+              <HeaderTooltip 
+                label="Status" 
+                tooltip="System classification (e.g. HU=Hurricane, TS=Tropical Storm)." 
+              />
+              <HeaderTooltip 
+                label="Location" 
+                tooltip="Latitude and Longitude of the circulation center." 
+              />
+              <HeaderTooltip 
+                label="Wind (kts)" 
+                align="right"
+                tooltip="VMAX - Maximum sustained wind speed in knots: 0 - 300 kts." 
+              />
+              <HeaderTooltip 
+                label="Pressure" 
+                align="right"
+                tooltip="MSLP - Minimum Sea Level Pressure in millibars (lower is stronger)." 
+              />
+              
+              {visibleColumns.rmw && (
+                <HeaderTooltip 
+                    label="RMW (nm)" 
+                    align="right"
+                    tooltip="RMW - Radius of Maximum Winds: Distance from center to strongest winds." 
+                />
+              )}
+              {visibleColumns.size34 && (
+                <HeaderTooltip 
+                    label="Size (34kt)" 
+                    align="right"
+                    tooltip="Maximum extent of 34 knot (Tropical Storm force) winds." 
+                />
+              )}
+              {visibleColumns.size50 && (
+                <HeaderTooltip 
+                    label="Size (50kt)" 
+                    align="right"
+                    tooltip="Maximum extent of 50 knot (Damaging/Storm force) winds." 
+                />
+              )}
+              {visibleColumns.size64 && (
+                <HeaderTooltip 
+                    label="Size (64kt)" 
+                    align="right"
+                    tooltip="Maximum extent of 64 knot (Hurricane force) winds." 
+                />
+              )}
+              
+              <HeaderTooltip 
+                label="Event" 
+                align="right"
+                tooltip="Key lifecycle events: Landfall (L), Peak Intensity (I), etc." 
+              />
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-700/50 font-mono">
             {storm.track.map((point, idx) => {
               const recordBadge = getRecordLabel(point.recordIdentifier);
+              const rad34 = getMaxRad(point.radii, 'ne34');
+              const rad50 = getMaxRad(point.radii, 'ne50');
+              const rad64 = getMaxRad(point.radii, 'ne64');
+              
               return (
                 <tr key={`${point.date}-${point.time}-${idx}`} className="hover:bg-slate-800/30 transition-colors">
                   <td className="px-4 py-3 whitespace-nowrap text-slate-200">
                     {point.date} <span className="text-slate-500 ml-1">{point.time}</span>
-                  </td>
-                  <td className="px-4 py-3 whitespace-nowrap h-10">
-                    {recordBadge && (
-                       <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold tracking-wide ${recordBadge.color}`}>
-                         {recordBadge.label}
-                       </span>
-                    )}
                   </td>
                   <td className="px-4 py-3 whitespace-nowrap">
                     <span 
@@ -78,13 +206,42 @@ const StormDataTable: React.FC<StormDataTableProps> = ({ storm }) => {
                   <td className="px-4 py-3 whitespace-nowrap text-slate-300">
                     {point.originalLat}, {point.originalLon}
                   </td>
-                  <td className={`px-4 py-3 whitespace-nowrap text-right font-medium ${getWindIntensityColor(point.maxWind)}`}>
+                  <td className={`px-4 py-3 whitespace-nowrap text-right font-bold ${getWindIntensityColor(point.maxWind)}`}>
                       {point.maxWind}
                   </td>
                   <td className="px-4 py-3 whitespace-nowrap text-right">
                     <span className={`${point.minPressure > 0 && point.minPressure < 980 ? 'text-rose-300 font-bold' : 'text-slate-400'}`}>
                       {point.minPressure === 0 ? '-' : point.minPressure}
                     </span>
+                  </td>
+                  
+                  {visibleColumns.rmw && (
+                      <td className="px-4 py-3 whitespace-nowrap text-right text-slate-400">
+                        {point.rmw ? point.rmw : '-'}
+                      </td>
+                  )}
+                  {visibleColumns.size34 && (
+                      <td className="px-4 py-3 whitespace-nowrap text-right text-slate-400">
+                        {rad34 > 0 ? rad34 + 'nm' : '-'}
+                      </td>
+                  )}
+                  {visibleColumns.size50 && (
+                      <td className="px-4 py-3 whitespace-nowrap text-right text-slate-400">
+                        {rad50 > 0 ? <span className="text-yellow-100/70">{rad50}nm</span> : '-'}
+                      </td>
+                  )}
+                  {visibleColumns.size64 && (
+                      <td className="px-4 py-3 whitespace-nowrap text-right text-slate-400">
+                        {rad64 > 0 ? <span className="text-rose-200/80 font-bold">{rad64}nm</span> : '-'}
+                      </td>
+                  )}
+
+                  <td className="px-4 py-3 whitespace-nowrap text-right h-10">
+                    {recordBadge && (
+                       <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold tracking-wide ${recordBadge.color}`}>
+                         {recordBadge.label}
+                       </span>
+                    )}
                   </td>
                 </tr>
               );

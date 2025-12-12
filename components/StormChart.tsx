@@ -50,7 +50,7 @@ const StormChart: React.FC<StormChartProps> = ({ storm }) => {
     <div className="w-full h-[350px] bg-slate-900/50 rounded-xl border border-slate-700 p-4 shadow-lg backdrop-blur-sm">
       <h3 className="text-slate-300 font-semibold mb-4 text-sm uppercase tracking-wider">Intensity Profile</h3>
       <ResponsiveContainer width="100%" height="100%">
-        <ComposedChart data={data} margin={{ top: 10, right: 30, left: 10, bottom: 0 }}>
+        <ComposedChart data={data} margin={{ top: 10, right: 30, left: 10, bottom: 20 }}>
           <defs>
             <linearGradient id="colorWind" x1="0" y1="0" x2="0" y2="1">
               <stop offset="5%" stopColor="#22d3ee" stopOpacity={0.8}/>
@@ -85,7 +85,8 @@ const StormChart: React.FC<StormChartProps> = ({ storm }) => {
           />
           
           <Tooltip content={<CustomTooltip />} />
-          <Legend wrapperStyle={{ fontSize: '12px', paddingTop: '10px' }} />
+          {/* Increased paddingTop to 40px for distinct separation from X-Axis */}
+          <Legend wrapperStyle={{ fontSize: '12px', paddingTop: '40px' }} />
           
           {/* Saffir-Simpson Category Reference Lines */}
           <ReferenceLine yAxisId="left" y={64} stroke="#facc15" strokeDasharray="3 3" opacity={0.5}>

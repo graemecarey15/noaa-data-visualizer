@@ -4,12 +4,13 @@ import { parseHurdat2 } from '../utils/parser';
 import { Storm } from '../types';
 import { SAMPLE_HURDAT_DATA, KNOWN_STORM_NAMES } from '../constants';
 
+export type ImportTab = 'active' | 'archive' | 'file';
+
 interface DataImporterProps {
   onImport: (storms: Storm[]) => void;
   onClose: () => void;
+  initialTab?: ImportTab;
 }
-
-type ImportTab = 'active' | 'archive' | 'file';
 
 // Direct link to the latest dataset via CORS proxy
 const DEFAULT_URL = "https://corsproxy.io/?https://www.aoml.noaa.gov/hrd/hurdat/hurdat2-1851-2023-051124.txt";
@@ -65,8 +66,8 @@ interface ImportItem {
   maxWind?: number; // Helper for immediate cache population
 }
 
-const DataImporter: React.FC<DataImporterProps> = ({ onImport, onClose }) => {
-  const [activeTab, setActiveTab] = useState<ImportTab>('active'); 
+const DataImporter: React.FC<DataImporterProps> = ({ onImport, onClose, initialTab }) => {
+  const [activeTab, setActiveTab] = useState<ImportTab>(initialTab || 'active'); 
   
   // -- Data State --
   const [availableItems, setAvailableItems] = useState<ImportItem[]>([]);
@@ -124,8 +125,8 @@ const DataImporter: React.FC<DataImporterProps> = ({ onImport, onClose }) => {
        setFilterYearEnd(2025);
        scanAtcfDirectory();
     } else if (activeTab === 'archive') {
-       // Reset filters to recent history for archive to avoid showing 1851 immediately
-       setFilterYearStart(2000);
+       // Reset filters to full history for archive
+       setFilterYearStart(1851);
        setFilterYearEnd(2023);
        // Auto-load archive immediately
        loadArchive();

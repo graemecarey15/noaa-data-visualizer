@@ -1,5 +1,6 @@
-import React, { useEffect, useState, useMemo, useRef, useCallback } from 'react';
-import { Storm, StormDataPoint } from '../types';
+
+import React, { useEffect, useState, useMemo, useRef } from 'react';
+import { Storm, StormDataPoint, WindRadii } from '../types';
 import { getStormPointColor, INTENSITY_COLORS, getCategoryLabel } from '../constants';
 
 interface StormMapProps {
@@ -18,6 +19,14 @@ const StormMap: React.FC<StormMapProps> = ({ storm }) => {
   const [viewState, setViewState] = useState({ zoom: 1, panX: 0, panY: 0 });
   const [isDragging, setIsDragging] = useState(false);
   const lastMousePos = useRef({ x: 0, y: 0 });
+
+  // --- LAYER STATE ---
+  const [showLayersMenu, setShowLayersMenu] = useState(false);
+  const [layers, setLayers] = useState({
+     track: true,
+     points: true,
+     windStructure: false, // Default Off as requested
+  });
 
   // Fetch Map Data once on mount
   useEffect(() => {
@@ -54,9 +63,7 @@ const StormMap: React.FC<StormMapProps> = ({ storm }) => {
   }, [storm]);
 
   // --- MAP PROJECTION LOGIC ---
-  // Calculate the "Base" ViewBox (The bounding box of the storm + padding)
   const baseView = useMemo(() => {
-    // Default world view if no track
     if (storm.track.length === 0) return { x: -130, y: -60, w: 100, h: 60, pointRadius: 0.5 };
 
     const lats = storm.track.map(p => p.lat);
@@ -67,11 +74,8 @@ const StormMap: React.FC<StormMapProps> = ({ storm }) => {
     let minLon = Math.min(...lons);
     let maxLon = Math.max(...lons);
 
-    // Padding in degrees (Increased for better context)
     const padding = 15; 
     
-    // Ensure minimum dimensions so short tracks don't look huge/distorted
-    // and we always see a decent chunk of the map.
     if (maxLat - minLat < 20) {
       const center = (maxLat + minLat) / 2;
       minLat = center - 10;
@@ -91,9 +95,6 @@ const StormMap: React.FC<StormMapProps> = ({ storm }) => {
     const w = maxLon - minLon;
     const h = maxLat - minLat;
 
-    // SVG Coordinate System: X = Lon, Y = -Lat (since SVG Y goes down)
-    // Base X is minLon
-    // Base Y is -maxLat (the "top" in SVG space corresponds to the highest latitude)
     return {
       x: minLon,
       y: -maxLat,
@@ -103,13 +104,10 @@ const StormMap: React.FC<StormMapProps> = ({ storm }) => {
     };
   }, [storm]);
 
-  // Calculate "Current" ViewBox based on Zoom/Pan state
   const viewBoxString = useMemo(() => {
     const currentW = baseView.w / viewState.zoom;
     const currentH = baseView.h / viewState.zoom;
     
-    // Center the zoom: 
-    // New origin = Base Origin + Pan + (Difference in Size / 2)
     const currentX = baseView.x + viewState.panX + (baseView.w - currentW) / 2;
     const currentY = baseView.y + viewState.panY + (baseView.h - currentH) / 2;
 
@@ -117,46 +115,11 @@ const StormMap: React.FC<StormMapProps> = ({ storm }) => {
   }, [baseView, viewState]);
 
   // --- EVENT HANDLERS ---
+  const handleZoomIn = () => setViewState(prev => ({ ...prev, zoom: Math.min(prev.zoom * 1.5, 50) }));
+  const handleZoomOut = () => setViewState(prev => ({ ...prev, zoom: Math.max(prev.zoom / 1.5, 0.1) }));
+  const handleReset = () => setViewState({ zoom: 1, panX: 0, panY: 0 });
+  const handleWorldView = () => setViewState({ zoom: 0.2, panX: 0, panY: 0 });
 
-  const handleZoomIn = () => {
-    setViewState(prev => ({ ...prev, zoom: Math.min(prev.zoom * 1.5, 50) }));
-  };
-
-  const handleZoomOut = () => {
-    // Allow zooming out much further (0.1x) to see world context
-    setViewState(prev => ({ ...prev, zoom: Math.max(prev.zoom / 1.5, 0.1) }));
-  };
-
-  const handleReset = () => {
-    setViewState({ zoom: 1, panX: 0, panY: 0 });
-  };
-  
-  const handleWorldView = () => {
-     setViewState({ zoom: 0.2, panX: 0, panY: 0 });
-  };
-
-  // Wheel Zoom
-  const handleWheel = useCallback((e: WheelEvent) => {
-    if (!containerRef.current?.contains(e.target as Node)) return;
-    e.preventDefault();
-    const scale = e.deltaY > 0 ? 0.9 : 1.1;
-    setViewState(prev => {
-      // Allow zooming out to 0.1x
-      const newZoom = Math.max(0.1, Math.min(50, prev.zoom * scale));
-      return { ...prev, zoom: newZoom };
-    });
-  }, []);
-
-  // Attach non-passive wheel listener to prevent page scroll
-  useEffect(() => {
-    const el = containerRef.current;
-    if (el) {
-      el.addEventListener('wheel', handleWheel, { passive: false });
-      return () => el.removeEventListener('wheel', handleWheel);
-    }
-  }, [handleWheel]);
-
-  // Pan Handlers
   const handleMouseDown = (e: React.MouseEvent) => {
     setIsDragging(true);
     lastMousePos.current = { x: e.clientX, y: e.clientY };
@@ -171,25 +134,24 @@ const StormMap: React.FC<StormMapProps> = ({ storm }) => {
 
     if (containerRef.current) {
       const { width } = containerRef.current.getBoundingClientRect();
-      // Calculate how many degrees per pixel at current zoom
       const currentWidthDegrees = baseView.w / viewState.zoom;
       const degreesPerPixel = currentWidthDegrees / width;
 
       setViewState(prev => ({
         ...prev,
-        // Pan X: dragging right (positive dx) moves map right (decreasing ViewBox X)
         panX: prev.panX - dx * degreesPerPixel,
-        // Pan Y: dragging down (positive dy) moves map down (decreasing ViewBox Y, i.e., moving North in Lat terms)
         panY: prev.panY - dy * degreesPerPixel
       }));
     }
   };
 
-  const handleMouseUp = () => {
-    setIsDragging(false);
+  const handleMouseUp = () => setIsDragging(false);
+
+  const toggleLayer = (key: keyof typeof layers) => {
+     setLayers(prev => ({ ...prev, [key]: !prev[key] }));
   };
 
-  // --- RENDER HELPERS ---
+  // --- GEOMETRY HELPERS ---
   const geoPath = (feature: any) => {
     if (feature.geometry.type === "Polygon") {
       return polygonToPath(feature.geometry.coordinates);
@@ -208,21 +170,78 @@ const StormMap: React.FC<StormMapProps> = ({ storm }) => {
     }).join(" ");
   };
 
-  // Adjust point radius based on zoom so they don't get huge
+  // Convert Nautical Miles to Degrees (Approximate)
+  // 1 degree lat ~= 60 nm
+  // 1 degree lon ~= 60 nm * cos(lat)
+  const nmToDegLat = (nm: number) => nm / 60;
+  const nmToDegLon = (nm: number, lat: number) => nm / (60 * Math.cos(lat * Math.PI / 180));
+
+  // Generate Quadrant Path for Wind Radii
+  // Start North (up, -Y), go Clockwise
+  const getQuadrantPath = (cx: number, cy: number, lat: number, ne: number, se: number, sw: number, nw: number) => {
+     if (ne === 0 && se === 0 && sw === 0 && nw === 0) return '';
+     
+     // Elliptical Arcs for nicer look
+     const rNE_x = nmToDegLon(ne, lat); const rNE_y = nmToDegLat(ne);
+     const rSE_x = nmToDegLon(se, lat); const rSE_y = nmToDegLat(se);
+     const rSW_x = nmToDegLon(sw, lat); const rSW_y = nmToDegLat(sw);
+     const rNW_x = nmToDegLon(nw, lat); const rNW_y = nmToDegLat(nw);
+
+     return `
+       M ${cx} ${cy - rNW_y}
+       A ${rNE_x} ${rNE_y} 0 0 1 ${cx + rNE_x} ${cy}
+       A ${rSE_x} ${rSE_y} 0 0 1 ${cx} ${cy + rSE_y}
+       A ${rSW_x} ${rSW_y} 0 0 1 ${cx - rSW_x} ${cy}
+       A ${rNW_x} ${rNW_y} 0 0 1 ${cx} ${cy - rNW_y}
+       Z
+     `;
+  };
+
   const visiblePointRadius = baseView.pointRadius / Math.sqrt(Math.max(0.5, viewState.zoom));
 
   return (
     <div className="w-full h-[500px] bg-slate-900/50 rounded-xl border border-slate-700 shadow-lg backdrop-blur-sm relative overflow-hidden flex flex-col select-none">
       
       {/* Header Overlay */}
-      <div className="absolute top-4 left-4 z-10 pointer-events-none">
+      <div className="absolute top-2 left-4 z-10 pointer-events-none">
         <h3 className="text-slate-200 font-bold text-lg drop-shadow-md">{storm.name} Track</h3>
         <p className="text-slate-400 text-xs drop-shadow-md">
            {storm.track.length > 0 ? `${storm.track[0].date} - ${storm.track[storm.track.length-1].date}` : ''}
         </p>
       </div>
 
-      {/* Legend Overlay - Saffir-Simpson Scale */}
+      {/* Layers Control */}
+      <div className="absolute top-4 right-4 z-30">
+         <button 
+           onClick={() => setShowLayersMenu(!showLayersMenu)}
+           className={`p-2 rounded shadow-lg border transition-colors ${showLayersMenu ? 'bg-cyan-600 border-cyan-400 text-white' : 'bg-slate-800 border-slate-600 text-slate-300 hover:text-white'}`}
+           title="Map Layers"
+         >
+            <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
+            </svg>
+         </button>
+         
+         {showLayersMenu && (
+             <div className="absolute top-10 right-0 bg-slate-900 border border-slate-700 rounded-lg shadow-xl p-3 w-48 animate-fade-in space-y-2 z-40">
+                <div className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Layers</div>
+                <label className="flex items-center gap-2 text-sm text-slate-300 cursor-pointer">
+                   <input type="checkbox" checked={layers.track} onChange={() => toggleLayer('track')} className="rounded border-slate-600 bg-slate-800 accent-cyan-500" />
+                   Storm Track
+                </label>
+                <label className="flex items-center gap-2 text-sm text-slate-300 cursor-pointer">
+                   <input type="checkbox" checked={layers.points} onChange={() => toggleLayer('points')} className="rounded border-slate-600 bg-slate-800 accent-cyan-500" />
+                   Intensity Points
+                </label>
+                <label className="flex items-center gap-2 text-sm text-slate-300 cursor-pointer">
+                   <input type="checkbox" checked={layers.windStructure} onChange={() => toggleLayer('windStructure')} className="rounded border-slate-600 bg-slate-800 accent-cyan-500" />
+                   Wind Field (Hover)
+                </label>
+             </div>
+         )}
+      </div>
+
+      {/* Legend Overlay */}
       <div className="absolute bottom-4 left-4 z-10 bg-slate-900/90 backdrop-blur p-2.5 rounded border border-slate-700 pointer-events-auto hidden sm:block shadow-xl">
          <div className="flex flex-col gap-1.5 text-[10px] text-slate-300 font-medium">
             <div className="flex items-center"><span className="w-3 h-3 rounded-sm mr-2" style={{background: INTENSITY_COLORS.CAT5}}></span> Category 5 (&ge;137kt)</div>
@@ -232,7 +251,14 @@ const StormMap: React.FC<StormMapProps> = ({ storm }) => {
             <div className="flex items-center"><span className="w-3 h-3 rounded-sm mr-2" style={{background: INTENSITY_COLORS.CAT1}}></span> Category 1</div>
             <div className="flex items-center"><span className="w-3 h-3 rounded-sm mr-2" style={{background: INTENSITY_COLORS.TS}}></span> Tropical Storm</div>
             <div className="flex items-center"><span className="w-3 h-3 rounded-sm mr-2" style={{background: INTENSITY_COLORS.TD}}></span> Depression</div>
-            <div className="flex items-center"><span className="w-3 h-3 rounded-sm mr-2" style={{background: INTENSITY_COLORS.EX}}></span> Extratropical / Low</div>
+            {layers.windStructure && (
+                <>
+                   <div className="h-px bg-slate-700 my-1"></div>
+                   <div className="flex items-center"><span className="w-3 h-3 rounded-full mr-2 border border-emerald-500 bg-emerald-500/20"></span> 34kt Radii (TS)</div>
+                   <div className="flex items-center"><span className="w-3 h-3 rounded-full mr-2 border border-yellow-500 bg-yellow-500/20"></span> 50kt Radii (Storm)</div>
+                   <div className="flex items-center"><span className="w-3 h-3 rounded-full mr-2 border border-rose-500 bg-rose-500/20"></span> 64kt Radii (Hurricane)</div>
+                </>
+            )}
          </div>
       </div>
 
@@ -258,7 +284,6 @@ const StormMap: React.FC<StormMapProps> = ({ storm }) => {
         </button>
       </div>
 
-      {/* Loading State */}
       {!worldData && (
          <div className="absolute inset-0 flex items-center justify-center text-slate-500">
             <span className="animate-pulse">Loading Map Geography...</span>
@@ -285,26 +310,55 @@ const StormMap: React.FC<StormMapProps> = ({ storm }) => {
               <path
                 key={i}
                 d={geoPath(feature)}
-                fill="#1e293b" // slate-800
-                stroke="#334155" // slate-700
+                fill="#1e293b"
+                stroke="#334155"
                 strokeWidth={visiblePointRadius * 0.5}
                 className="transition-colors hover:fill-slate-700"
               />
             ))}
           </g>
 
+          {/* 2. Wind Field Layer (If Toggled & Hovered) */}
+          {layers.windStructure && hoveredPoint && hoveredPoint.radii && (
+              <g className="wind-field-layer pointer-events-none">
+                 {/* 34kt */}
+                 <path 
+                    d={getQuadrantPath(hoveredPoint.lon, -hoveredPoint.lat, hoveredPoint.lat, hoveredPoint.radii.ne34, hoveredPoint.radii.se34, hoveredPoint.radii.sw34, hoveredPoint.radii.nw34)}
+                    fill="rgba(16, 185, 129, 0.2)"
+                    stroke="rgba(16, 185, 129, 0.5)"
+                    strokeWidth={visiblePointRadius * 0.2}
+                 />
+                 {/* 50kt */}
+                 <path 
+                    d={getQuadrantPath(hoveredPoint.lon, -hoveredPoint.lat, hoveredPoint.lat, hoveredPoint.radii.ne50, hoveredPoint.radii.se50, hoveredPoint.radii.sw50, hoveredPoint.radii.nw50)}
+                    fill="rgba(234, 179, 8, 0.2)"
+                    stroke="rgba(234, 179, 8, 0.5)"
+                    strokeWidth={visiblePointRadius * 0.2}
+                 />
+                 {/* 64kt */}
+                 <path 
+                    d={getQuadrantPath(hoveredPoint.lon, -hoveredPoint.lat, hoveredPoint.lat, hoveredPoint.radii.ne64, hoveredPoint.radii.se64, hoveredPoint.radii.sw64, hoveredPoint.radii.nw64)}
+                    fill="rgba(244, 63, 94, 0.2)"
+                    stroke="rgba(244, 63, 94, 0.5)"
+                    strokeWidth={visiblePointRadius * 0.2}
+                 />
+              </g>
+          )}
+
           {/* 3. Storm Track Line */}
-          <polyline
-            points={storm.track.map(p => `${p.lon},${-p.lat}`).join(" ")}
-            fill="none"
-            stroke="#64748b" // slate-500
-            strokeWidth={visiblePointRadius * 0.5}
-            strokeDasharray={`${visiblePointRadius}, ${visiblePointRadius}`}
-            opacity={0.4}
-          />
+          {layers.track && (
+            <polyline
+                points={storm.track.map(p => `${p.lon},${-p.lat}`).join(" ")}
+                fill="none"
+                stroke="#64748b"
+                strokeWidth={visiblePointRadius * 0.5}
+                strokeDasharray={`${visiblePointRadius}, ${visiblePointRadius}`}
+                opacity={0.4}
+            />
+          )}
 
           {/* 4. Storm Points */}
-          {storm.track.map((p, i) => {
+          {layers.points && storm.track.map((p, i) => {
             const pointColor = getStormPointColor(p.maxWind, p.status);
             return (
               <circle
@@ -336,7 +390,7 @@ const StormMap: React.FC<StormMapProps> = ({ storm }) => {
           )}
         </svg>
 
-        {/* Floating Tooltip (HTML overlay) */}
+        {/* Floating Tooltip */}
         {hoveredPoint && (
            <div 
              className="absolute bg-slate-800 border border-slate-600 p-2.5 rounded shadow-2xl text-xs z-50 pointer-events-none whitespace-nowrap backdrop-blur-md"
@@ -362,6 +416,17 @@ const StormMap: React.FC<StormMapProps> = ({ storm }) => {
               <div className="text-slate-300">
                  {hoveredPoint.status} • <span className="text-cyan-400 font-bold">{hoveredPoint.maxWind} kts</span> • {hoveredPoint.minPressure > 0 ? `${hoveredPoint.minPressure}mb` : ''}
               </div>
+              
+              {/* Show Structure Info if Toggled On */}
+              {hoveredPoint.radii && (hoveredPoint.radii.ne34 > 0 || hoveredPoint.radii.ne50 > 0 || hoveredPoint.radii.ne64 > 0) && (
+                  <div className="mt-1 pt-1 border-t border-slate-700 text-[9px] grid grid-cols-2 gap-x-2">
+                     <span className="text-emerald-400">NE34: {hoveredPoint.radii.ne34}nm</span>
+                     {hoveredPoint.radii.ne50 > 0 && <span className="text-yellow-400">NE50: {hoveredPoint.radii.ne50}nm</span>}
+                     {hoveredPoint.radii.ne64 > 0 && <span className="text-rose-400">NE64: {hoveredPoint.radii.ne64}nm</span>}
+                     <span className="text-slate-400">RMW: {hoveredPoint.rmw ? hoveredPoint.rmw + 'nm' : 'N/A'}</span>
+                  </div>
+              )}
+
               {hoveredPoint.recordIdentifier === 'L' && (
                  <div className="text-emerald-400 font-bold mt-1 text-[10px] tracking-widest bg-emerald-900/30 px-1 py-0.5 rounded w-fit">LANDFALL</div>
               )}

@@ -1,14 +1,13 @@
-
-
 import React, { useState, useEffect, useMemo } from 'react';
 import { parseHurdat2 } from './utils/parser';
-import { SAMPLE_HURDAT_DATA, PRELOADED_SEASON_DATA } from './constants';
+import { SAMPLE_HURDAT_DATA, PRELOADED_SEASON_DATA, getCategoryLabel } from './constants';
 import { Storm } from './types';
 import StormChart from './components/StormChart';
 import StormMap from './components/StormMap';
 import StormDataTable from './components/StormDataTable';
 import StormSummary from './components/StormSummary';
-import DataImporter from './components/DataImporter';
+import DataImporter, { ImportTab } from './components/DataImporter';
+import StormSelector from './components/StormSelector';
 
 const App: React.FC = () => {
   // We keep two sets of data:
@@ -20,17 +19,20 @@ const App: React.FC = () => {
   // State for View
   const [selectedStormId, setSelectedStormId] = useState<string>('');
   const [showInput, setShowInput] = useState<boolean>(false);
+  const [importTab, setImportTab] = useState<ImportTab>('active');
   const [isHydrated, setIsHydrated] = useState<boolean>(false);
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved'>('idle');
   
   // Reset Confirmation State
   const [showResetModal, setShowResetModal] = useState<boolean>(false);
   
+  const currentYear = new Date().getFullYear();
+
   // View Filters
-  const [filterName, setFilterName] = useState<string>('');
   const [filterYearStart, setFilterYearStart] = useState<number>(0);
   const [filterYearEnd, setFilterYearEnd] = useState<number>(0);
-  const [hideUnnamed, setHideUnnamed] = useState<boolean>(false);
+  // Default to 5 Years ('last5')
+  const [activePreset, setActivePreset] = useState<string>('last5'); 
 
   // 1. Load Data & State on Mount
   useEffect(() => {
@@ -78,7 +80,8 @@ const App: React.FC = () => {
     const userIds = new Set(userStorms.map(s => s.id));
     // User storms override defaults if ID matches
     const activeDefaults = defaultStorms.filter(s => !userIds.has(s.id));
-    const all = [...userStorms, ...activeDefaults];
+    const activeUser = userStorms;
+    const all = [...activeUser, ...activeDefaults];
     
     return all.sort((a,b) => {
        if (b.year !== a.year) return b.year - a.year;
@@ -86,22 +89,13 @@ const App: React.FC = () => {
     });
   }, [defaultStorms, userStorms]);
 
-  // Auto-Select Logic (Only runs if no selection exists after hydration)
-  useEffect(() => {
-    if (isHydrated && !selectedStormId && storms.length > 0) {
-      setSelectedStormId(storms[0].id);
-    }
-  }, [storms, selectedStormId, isHydrated]);
-
-
   // Determine Data Bounds
   const { dataMinYear, dataMaxYear } = useMemo(() => {
-    const currentYear = new Date().getFullYear();
-    if (storms.length === 0) return { dataMinYear: 1851, dataMaxYear: currentYear + 1 };
+    const cy = new Date().getFullYear();
+    if (storms.length === 0) return { dataMinYear: 1851, dataMaxYear: cy + 1 };
     
     const years = storms.map(s => s.year);
-    // Allow range to extend to current year even if data is old
-    const max = Math.max(...years, currentYear);
+    const max = Math.max(...years, cy); // Ensure max includes current year if data exists
     const min = Math.min(...years);
     return { 
       dataMinYear: min, 
@@ -109,12 +103,43 @@ const App: React.FC = () => {
     };
   }, [storms]);
 
-  // Sync filters to data bounds
+  // Filtered list for the selector based on date picker
+  const visibleStorms = useMemo(() => {
+    return storms.filter(s => 
+       (filterYearStart === 0 || s.year >= filterYearStart) && 
+       (filterYearEnd === 0 || s.year <= filterYearEnd)
+    );
+  }, [storms, filterYearStart, filterYearEnd]);
+
+  // Auto-Select Logic
   useEffect(() => {
-    // Only set defaults if filters are untouched (0)
-    if (filterYearStart === 0) setFilterYearStart(dataMinYear);
-    if (filterYearEnd === 0) setFilterYearEnd(dataMaxYear);
-  }, [dataMinYear, dataMaxYear, filterYearStart, filterYearEnd]);
+    if (isHydrated && !selectedStormId && storms.length > 0) {
+      // Prefer visible storms first
+      if (visibleStorms.length > 0) {
+         setSelectedStormId(visibleStorms[0].id);
+      } else {
+         setSelectedStormId(storms[0].id);
+      }
+    }
+  }, [storms, visibleStorms, selectedStormId, isHydrated]);
+
+  // Sync filters to data bounds if not set (Initialization)
+  useEffect(() => {
+    if (filterYearStart === 0 && dataMinYear > 0) {
+       // Apply Default Preset Logic based on activePreset state
+       if (activePreset === 'last5') {
+          setFilterYearStart(currentYear - 5);
+          setFilterYearEnd(currentYear);
+       } else if (activePreset === 'last1') {
+          setFilterYearStart(2025);
+          setFilterYearEnd(2025);
+       } else {
+          // Fallback to full range
+          setFilterYearStart(dataMinYear);
+          setFilterYearEnd(dataMaxYear);
+       }
+    }
+  }, [dataMinYear, dataMaxYear, filterYearStart, activePreset, currentYear]);
 
   // Handle new data from importer
   const handleDataImport = (newStorms: Storm[]) => {
@@ -125,7 +150,6 @@ const App: React.FC = () => {
     });
 
     if (newStorms.length > 0) {
-      // Auto-select the first of the newly imported storms
       setSelectedStormId(newStorms[0].id);
     }
     setShowInput(false);
@@ -133,10 +157,7 @@ const App: React.FC = () => {
 
   const handleManualSave = () => {
     setSaveStatus('saving');
-    // Promote all currently visible storms (including defaults) to User Storms
-    // This effectively snapshots the current workspace
     setUserStorms(storms);
-    
     setTimeout(() => {
       setSaveStatus('saved');
       setTimeout(() => setSaveStatus('idle'), 2000);
@@ -144,55 +165,76 @@ const App: React.FC = () => {
   };
 
   const executeReset = () => {
-    // 1. Clear State
     setUserStorms([]);
-    
-    // 2. Reset Filters so default data is visible immediately
-    setFilterYearStart(0);
-    setFilterYearEnd(0);
-    setFilterName('');
-    setHideUnnamed(false);
+    setActivePreset('last5');
+    setFilterYearStart(currentYear - 5);
+    setFilterYearEnd(currentYear);
 
-    // 3. Force Clear Storage
     setTimeout(() => {
         localStorage.removeItem('hurdat_user_storms');
     }, 0);
 
-    // 4. Revert to default selection
     if (defaultStorms.length > 0) setSelectedStormId(defaultStorms[0].id);
     else setSelectedStormId('');
     
     setShowResetModal(false);
   };
 
-  // Helper to calculate max intensity label
-  const getStormIntensityLabel = (storm: Storm) => {
-    if (!storm.track || storm.track.length === 0) return 'N/A';
-    const maxWind = Math.max(...storm.track.map(t => t.maxWind));
-    
-    if (maxWind >= 137) return 'Category 5';
-    if (maxWind >= 113) return 'Category 4';
-    if (maxWind >= 96) return 'Category 3';
-    if (maxWind >= 83) return 'Category 2';
-    if (maxWind >= 64) return 'Category 1';
-    if (maxWind >= 34) return 'Tropical Storm';
-    return 'Depression';
+  const applyYearPreset = (preset: string) => {
+      setActivePreset(preset);
+      switch(preset) {
+          case 'last1':
+              setFilterYearStart(2025);
+              setFilterYearEnd(2025);
+              break;
+          case 'last5':
+              setFilterYearStart(currentYear - 5);
+              setFilterYearEnd(currentYear);
+              break;
+          case 'last20':
+              setFilterYearStart(currentYear - 20);
+              setFilterYearEnd(currentYear);
+              break;
+          case 'satellite':
+              setFilterYearStart(1979);
+              setFilterYearEnd(currentYear);
+              break;
+          case 'all':
+              setFilterYearStart(dataMinYear);
+              setFilterYearEnd(currentYear + 1);
+              break;
+      }
   };
-
-  // Filter Logic
-  const filteredStorms = useMemo(() => {
-    return storms.filter(s => {
-      if (s.year < filterYearStart || s.year > filterYearEnd) return false;
-      if (filterName && !s.name.includes(filterName.toUpperCase())) return false;
-      if (hideUnnamed && s.name === 'UNNAMED') return false;
-      return true;
-    });
-  }, [storms, filterYearStart, filterYearEnd, filterName, hideUnnamed]);
+  
+  const isPresetDisabled = (value: string) => {
+      if (storms.length === 0) return true;
+      switch(value) {
+          case 'last1': return dataMaxYear < 2025; // Disable if no 2025 data present
+          case 'last5': return dataMinYear > (currentYear - 5);
+          case 'last20': return dataMinYear > (currentYear - 20);
+          case 'satellite': return dataMinYear > 1979;
+          case 'all': return false;
+          default: return false;
+      }
+  };
 
   const selectedStorm = useMemo(() => 
     storms.find(s => s.id === selectedStormId), 
   [storms, selectedStormId]);
 
+  const YEAR_PRESETS = [
+    { label: "'25", value: 'last1', title: '2025 Season' },
+    { label: 'Last 5 yrs', value: 'last5' },
+    { label: 'Last 20 yrs', value: 'last20' },
+    { label: 'Satellite Era', value: 'satellite', title: 'Satellite Era (1979+)' },
+    { label: 'All', value: 'all' },
+  ];
+
+  const presetOptions = YEAR_PRESETS.map(p => ({
+     ...p,
+     disabled: isPresetDisabled(p.value)
+  }));
+  
   return (
     <div className="min-h-screen bg-slate-950 text-slate-200 font-sans selection:bg-cyan-500/30">
       
@@ -245,7 +287,10 @@ const App: React.FC = () => {
             </button>
 
             <button
-              onClick={() => setShowInput(true)}
+              onClick={() => {
+                 setImportTab('active');
+                 setShowInput(true);
+              }}
               className="bg-cyan-600 hover:bg-cyan-500 text-white px-4 py-1.5 rounded-full text-sm font-semibold transition-all shadow-lg shadow-cyan-900/20 flex items-center gap-2"
             >
               <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -258,72 +303,84 @@ const App: React.FC = () => {
       </header>
 
       {/* Main Content */}
-      <main className="max-w-7xl mx-auto p-4 md:p-6 space-y-6">
+      <main className="max-w-7xl mx-auto p-4 md:p-6 space-y-10">
         
         {/* Control Bar */}
-        <div className="bg-slate-900/50 border border-slate-800 p-4 rounded-xl backdrop-blur-sm flex flex-col md:flex-row gap-4 justify-between items-center shadow-lg">
+        <div className="bg-slate-900/50 border border-slate-800 p-4 rounded-xl backdrop-blur-sm shadow-lg">
           
-          {/* Filters */}
-          <div className="flex flex-wrap gap-2 items-center w-full md:w-auto">
-             <div className="relative group">
-                <svg className="absolute left-3 top-2.5 h-4 w-4 text-slate-500 group-focus-within:text-cyan-400" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-                </svg>
-                <input 
-                  type="text" 
-                  placeholder="Search Storm..." 
-                  value={filterName}
-                  onChange={(e) => setFilterName(e.target.value)}
-                  className="bg-slate-950 border border-slate-700 rounded-lg pl-9 pr-3 py-2 text-sm text-slate-200 outline-none focus:border-cyan-500 w-full sm:w-48"
+          <div className="flex flex-wrap gap-3 items-center">
+             
+             {/* Command Palette Storm Selector */}
+             <div className="relative flex-1 min-w-[200px] max-w-sm">
+                <StormSelector 
+                   storms={visibleStorms} 
+                   selectedId={selectedStormId} 
+                   onSelect={setSelectedStormId}
+                   activePreset={activePreset}
+                   onPresetChange={applyYearPreset}
+                   presetOptions={presetOptions}
+                   onImport={() => {
+                       // Contextual import: if on '25 preset, open active tab. Else archive.
+                       const targetTab = activePreset === 'last1' ? 'active' : 'archive';
+                       setImportTab(targetTab);
+                       setShowInput(true);
+                   }}
                 />
              </div>
 
-             <div className="flex items-center gap-1 bg-slate-950 border border-slate-700 rounded-lg px-2 py-1">
+             <div className="flex items-center gap-3 text-xs text-slate-500 font-medium whitespace-nowrap hidden sm:flex">
+                {/* BUTTON REMOVED FROM HERE */}
+                <span><span className="text-slate-300 font-bold">{visibleStorms.length}</span> storms</span>
+             </div>
+
+             {/* Year Range Inputs */}
+             <div className="flex items-center gap-1 bg-slate-950 border border-slate-700 rounded-lg px-2 py-1 shadow-sm shrink-0 h-[38px]">
                 <input 
                   type="number" 
                   value={filterYearStart}
-                  onChange={(e) => setFilterYearStart(Number(e.target.value))}
-                  className="bg-transparent w-16 text-center text-sm outline-none text-slate-300"
+                  onChange={(e) => { setFilterYearStart(Number(e.target.value)); setActivePreset(''); }}
+                  className="bg-transparent w-16 text-center text-sm outline-none text-slate-300 font-mono"
                 />
                 <span className="text-slate-600">-</span>
                 <input 
                   type="number" 
                   value={filterYearEnd}
-                  onChange={(e) => setFilterYearEnd(Number(e.target.value))}
-                  className="bg-transparent w-16 text-center text-sm outline-none text-slate-300"
+                  onChange={(e) => { setFilterYearEnd(Number(e.target.value)); setActivePreset(''); }}
+                  className="bg-transparent w-16 text-center text-sm outline-none text-slate-300 font-mono"
                 />
              </div>
-             
-             <label className="flex items-center gap-2 cursor-pointer text-xs text-slate-400 hover:text-slate-200 select-none px-2">
-                <input 
-                   type="checkbox" 
-                   checked={hideUnnamed}
-                   onChange={(e) => setHideUnnamed(e.target.checked)}
-                   className="accent-cyan-500"
-                />
-                Hide Unnamed
-             </label>
-          </div>
 
-          {/* Storm Selector */}
-          <div className="w-full md:w-1/3">
-            <select
-              value={selectedStormId}
-              onChange={(e) => setSelectedStormId(e.target.value)}
-              className="w-full bg-slate-950 border border-slate-700 text-slate-200 text-sm rounded-lg focus:ring-2 focus:ring-cyan-500 focus:border-transparent p-2.5 outline-none shadow-inner"
-            >
-              {filteredStorms.length === 0 && <option value="">No matches found</option>}
-              {filteredStorms.map((storm) => (
-                <option key={storm.id} value={storm.id}>
-                  {storm.year} — {storm.name} ({getStormIntensityLabel(storm)})
-                </option>
-              ))}
-            </select>
+             {/* Divider / Spacer */}
+             <div className="hidden xl:block w-px h-8 bg-slate-700 mx-2"></div>
+
+             {/* Preset Buttons */}
+             <div className="flex flex-wrap items-center gap-1 bg-slate-800/50 p-1 rounded-lg border border-slate-700/50 shrink-0 w-full sm:w-auto justify-center sm:justify-start ml-auto xl:ml-0 h-[38px]">
+                {presetOptions.map(preset => {
+                   return (
+                      <button 
+                          key={preset.value}
+                          onClick={() => applyYearPreset(preset.value)}
+                          disabled={preset.disabled}
+                          title={preset.title}
+                          className={`px-3 py-1 text-xs font-bold rounded transition-colors whitespace-nowrap h-full flex items-center ${
+                            activePreset === preset.value 
+                                ? 'bg-cyan-600 text-white shadow-sm' 
+                                : preset.disabled 
+                                  ? 'text-slate-600 cursor-not-allowed opacity-50 bg-slate-800/50'
+                                  : 'text-slate-400 hover:text-cyan-400 hover:bg-slate-700'
+                          }`}
+                      >
+                          {preset.label}
+                      </button>
+                   );
+                })}
+             </div>
+
           </div>
         </div>
 
         {selectedStorm ? (
-          <div className="space-y-6 animate-fade-in">
+          <div className="space-y-10 animate-fade-in">
             {/* Top Row: Summary Stats */}
             <StormSummary storm={selectedStorm} />
 
@@ -357,7 +414,7 @@ const App: React.FC = () => {
             >
               Close [ESC]
             </button>
-            <DataImporter onImport={handleDataImport} onClose={() => setShowInput(false)} />
+            <DataImporter onImport={handleDataImport} onClose={() => setShowInput(false)} initialTab={importTab} />
           </div>
         </div>
       )}
