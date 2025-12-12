@@ -2,18 +2,18 @@ import React, { useMemo } from 'react';
 import { Storm } from '../types';
 
 interface StormSummaryProps {
-  storm: Storm;
+  storm?: Storm | null;
 }
 
 const StormSummary: React.FC<StormSummaryProps> = ({ storm }) => {
   const stats = useMemo(() => {
-    if (!storm.track || storm.track.length === 0) {
+    if (!storm || !storm.track || storm.track.length === 0) {
       return {
         peakWind: 0,
         minPressure: 0,
         landfalls: [],
         category: 'N/A',
-        catColor: 'text-slate-400',
+        catColor: 'text-slate-500',
         durationDays: 0
       };
     }
@@ -59,10 +59,12 @@ const StormSummary: React.FC<StormSummaryProps> = ({ storm }) => {
         <div>
           <p className="text-slate-500 text-xs font-bold uppercase tracking-wider mb-1">Peak Intensity</p>
           <div className="flex items-baseline gap-2">
-            <h4 className={`text-2xl font-bold ${stats.catColor}`}>{stats.peakWind} <span className="text-sm text-slate-400 font-normal">kts</span></h4>
+            <h4 className={`text-2xl font-bold ${stats.peakWind > 0 ? stats.catColor : 'text-slate-600'}`}>
+                {stats.peakWind > 0 ? stats.peakWind : '-'} <span className="text-sm text-slate-400 font-normal">kts</span>
+            </h4>
           </div>
         </div>
-        <div className={`mt-2 text-xs font-medium px-2 py-1 rounded bg-slate-800 w-fit ${stats.catColor}`}>
+        <div className={`mt-2 text-xs font-medium px-2 py-1 rounded bg-slate-800 w-fit ${stats.peakWind > 0 ? stats.catColor : 'text-slate-500'}`}>
           {stats.category}
         </div>
       </div>
@@ -71,7 +73,9 @@ const StormSummary: React.FC<StormSummaryProps> = ({ storm }) => {
       <div className="bg-slate-900/50 border border-slate-700 p-4 rounded-xl shadow-lg backdrop-blur-sm flex flex-col justify-between hover:border-slate-600 transition-colors">
         <p className="text-slate-500 text-xs font-bold uppercase tracking-wider mb-1">Min Pressure</p>
         <div className="flex items-baseline gap-2">
-          <h4 className="text-2xl font-bold text-rose-400">{stats.minPressure > 0 ? stats.minPressure : 'N/A'} <span className="text-sm text-slate-400 font-normal">mb</span></h4>
+          <h4 className={`text-2xl font-bold ${stats.minPressure > 0 ? 'text-rose-400' : 'text-slate-600'}`}>
+              {stats.minPressure > 0 ? stats.minPressure : '-'} <span className="text-sm text-slate-400 font-normal">mb</span>
+          </h4>
         </div>
         <p className="text-xs text-slate-500 mt-2">Lower is stronger</p>
       </div>
@@ -80,7 +84,7 @@ const StormSummary: React.FC<StormSummaryProps> = ({ storm }) => {
       <div className="bg-slate-900/50 border border-slate-700 p-4 rounded-xl shadow-lg backdrop-blur-sm flex flex-col justify-between hover:border-slate-600 transition-colors">
         <p className="text-slate-500 text-xs font-bold uppercase tracking-wider mb-1">Landfalls</p>
         <div className="flex items-baseline gap-2">
-          <h4 className="text-2xl font-bold text-emerald-400">{stats.landfalls.length}</h4>
+          <h4 className={`text-2xl font-bold ${stats.landfalls.length > 0 ? 'text-emerald-400' : 'text-slate-600'}`}>{stats.landfalls.length}</h4>
         </div>
         <div className="mt-2 flex flex-wrap gap-1">
           {stats.landfalls.length > 0 ? (
@@ -99,10 +103,12 @@ const StormSummary: React.FC<StormSummaryProps> = ({ storm }) => {
       <div className="bg-slate-900/50 border border-slate-700 p-4 rounded-xl shadow-lg backdrop-blur-sm flex flex-col justify-between hover:border-slate-600 transition-colors">
         <p className="text-slate-500 text-xs font-bold uppercase tracking-wider mb-1">Duration</p>
         <div className="flex items-baseline gap-2">
-          <h4 className="text-2xl font-bold text-blue-400">{stats.durationDays} <span className="text-sm text-slate-400 font-normal">days</span></h4>
+          <h4 className={`text-2xl font-bold ${stats.durationDays > 0 ? 'text-blue-400' : 'text-slate-600'}`}>
+              {stats.durationDays > 0 ? stats.durationDays : '-'} <span className="text-sm text-slate-400 font-normal">days</span>
+          </h4>
         </div>
         <p className="text-xs text-slate-500 mt-2">
-          {storm.track.length > 0 ? `${storm.track[0].date} — ${storm.track[storm.track.length -1].date}` : 'No Data'}
+          {storm && storm.track.length > 0 ? `${storm.track[0].date} — ${storm.track[storm.track.length -1].date}` : 'No Data'}
         </p>
       </div>
     </div>

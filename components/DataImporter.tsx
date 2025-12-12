@@ -1,8 +1,7 @@
-
 import React, { useState, useMemo, useRef, useEffect } from 'react';
 import { parseHurdat2 } from '../utils/parser';
 import { Storm } from '../types';
-import { SAMPLE_HURDAT_DATA, KNOWN_STORM_NAMES } from '../constants';
+import { SAMPLE_HURDAT_DATA, KNOWN_STORM_NAMES, PRELOADED_SEASON_DATA } from '../constants';
 
 export type ImportTab = 'active' | 'archive' | 'file';
 
@@ -127,7 +126,7 @@ const DataImporter: React.FC<DataImporterProps> = ({ onImport, onClose, initialT
     } else if (activeTab === 'archive') {
        // Reset filters to full history for archive
        setFilterYearStart(1851);
-       setFilterYearEnd(2023);
+       setFilterYearEnd(2024);
        // Auto-load archive immediately
        loadArchive();
     }
@@ -224,9 +223,16 @@ const DataImporter: React.FC<DataImporterProps> = ({ onImport, onClose, initialT
           const res = await fetch(url);
           if (!res.ok) throw new Error("Failed to fetch archive file");
           const text = await res.text();
-          const storms = parseHurdat2(text);
+          let storms = parseHurdat2(text);
           
           if (storms.length === 0) throw new Error("No storms found in file");
+
+          // Merge 2024 Supplemental Data if not present
+          const has2024 = storms.some(s => s.year === 2024);
+          if (!has2024) {
+             const supplemental = parseHurdat2(PRELOADED_SEASON_DATA);
+             storms = [...storms, ...supplemental];
+          }
 
           // Convert parsed storms to ImportItems
           const items: ImportItem[] = storms.map(s => {
@@ -588,7 +594,7 @@ const DataImporter: React.FC<DataImporterProps> = ({ onImport, onClose, initialT
               : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900/50'
           }`}
         >
-          HURDAT2 Archive (1851-2023)
+          HURDAT2 Archive (1851-2024)
         </button>
         <button
           onClick={() => setActiveTab('file')}
@@ -645,21 +651,30 @@ const DataImporter: React.FC<DataImporterProps> = ({ onImport, onClose, initialT
                         
                         {/* Year Range (Only for Archive) */}
                         {activeTab === 'archive' && (
-                          <div className="flex items-center gap-2 bg-slate-950 border border-slate-700 rounded-lg px-3 py-2">
-                               <span className="text-xs text-slate-500 font-bold uppercase">Year</span>
-                               <input 
-                                 type="number" 
-                                 value={filterYearStart}
-                                 onChange={e => setFilterYearStart(parseInt(e.target.value))}
-                                 className="bg-transparent w-16 text-center text-sm outline-none text-slate-300"
-                               />
-                               <span className="text-slate-600">-</span>
-                               <input 
-                                 type="number" 
-                                 value={filterYearEnd}
-                                 onChange={e => setFilterYearEnd(parseInt(e.target.value))}
-                                 className="bg-transparent w-16 text-center text-sm outline-none text-slate-300"
-                               />
+                          <div className="flex flex-col gap-1.5">
+                              <div className="flex items-center gap-2 bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 h-[38px]">
+                                   <span className="text-xs text-slate-500 font-bold uppercase">Year</span>
+                                   <input 
+                                     type="number" 
+                                     value={filterYearStart}
+                                     onChange={e => setFilterYearStart(parseInt(e.target.value))}
+                                     className="bg-transparent w-16 text-center text-sm outline-none text-slate-300 font-mono"
+                                   />
+                                   <span className="text-slate-600">-</span>
+                                   <input 
+                                     type="number" 
+                                     value={filterYearEnd}
+                                     onChange={e => setFilterYearEnd(parseInt(e.target.value))}
+                                     className="bg-transparent w-16 text-center text-sm outline-none text-slate-300 font-mono"
+                                   />
+                              </div>
+                              <div className="flex justify-end gap-1">
+                                  <button onClick={() => { setFilterYearStart(1851); setFilterYearEnd(2024); }} className="px-1.5 py-0.5 text-[10px] rounded bg-slate-800 text-slate-400 hover:text-cyan-400 hover:bg-slate-700 transition-colors border border-slate-700">All</button>
+                                  <button onClick={() => { setFilterYearStart(1979); setFilterYearEnd(2024); }} className="px-1.5 py-0.5 text-[10px] rounded bg-slate-800 text-slate-400 hover:text-cyan-400 hover:bg-slate-700 transition-colors border border-slate-700">1979+</button>
+                                  <button onClick={() => { setFilterYearStart(2000); setFilterYearEnd(2024); }} className="px-1.5 py-0.5 text-[10px] rounded bg-slate-800 text-slate-400 hover:text-cyan-400 hover:bg-slate-700 transition-colors border border-slate-700">2000+</button>
+                                  <button onClick={() => { setFilterYearStart(2015); setFilterYearEnd(2024); }} className="px-1.5 py-0.5 text-[10px] rounded bg-slate-800 text-slate-400 hover:text-cyan-400 hover:bg-slate-700 transition-colors border border-slate-700">Last 10</button>
+                                  <button onClick={() => { setFilterYearStart(2020); setFilterYearEnd(2024); }} className="px-1.5 py-0.5 text-[10px] rounded bg-slate-800 text-slate-400 hover:text-cyan-400 hover:bg-slate-700 transition-colors border border-slate-700">Last 5</button>
+                              </div>
                           </div>
                         )}
                     </div>

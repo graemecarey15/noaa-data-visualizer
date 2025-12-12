@@ -3,7 +3,7 @@ import { Storm, StormDataPoint, WindRadii } from '../types';
 import { getStormPointColor, INTENSITY_COLORS, getCategoryLabel } from '../constants';
 
 interface StormMapProps {
-  storm: Storm;
+  storm?: Storm | null;
 }
 
 // Lightweight World Map GeoJSON URL (Reliable source)
@@ -72,7 +72,7 @@ const StormMap: React.FC<StormMapProps> = ({ storm }) => {
 
   // --- MAP PROJECTION LOGIC ---
   const baseView = useMemo(() => {
-    if (storm.track.length === 0) return { x: -130, y: -60, w: 100, h: 60, pointRadius: 0.5 };
+    if (!storm || storm.track.length === 0) return { x: -130, y: -60, w: 100, h: 60, pointRadius: 0.5 };
 
     const lats = storm.track.map(p => p.lat);
     const lons = storm.track.map(p => p.lon);
@@ -241,9 +241,9 @@ const StormMap: React.FC<StormMapProps> = ({ storm }) => {
       
       {/* Header Overlay */}
       <div className="absolute top-2 left-4 z-10 pointer-events-none">
-        <h3 className="text-slate-200 font-bold text-lg drop-shadow-md">{storm.name} Track</h3>
+        <h3 className="text-slate-200 font-bold text-lg drop-shadow-md">{storm ? storm.name : "Global View"} {storm ? "Track" : ""}</h3>
         <p className="text-slate-400 text-xs drop-shadow-md">
-           {storm.track.length > 0 ? `${storm.track[0].date} - ${storm.track[storm.track.length-1].date}` : ''}
+           {storm && storm.track.length > 0 ? `${storm.track[0].date} - ${storm.track[storm.track.length-1].date}` : storm ? 'No Data' : 'No Storm Selected'}
         </p>
       </div>
 
@@ -385,7 +385,7 @@ const StormMap: React.FC<StormMapProps> = ({ storm }) => {
           </g>
 
           {/* 2. Storm Track Line */}
-          {layers.track && (
+          {layers.track && storm && (
             <polyline
                 points={storm.track.map(p => `${p.lon},${-p.lat}`).join(" ")}
                 fill="none"
@@ -397,7 +397,6 @@ const StormMap: React.FC<StormMapProps> = ({ storm }) => {
           )}
 
           {/* 3. Wind Field Layer (Dynamic: Hovered Only) - Circular Approximation */}
-          {/* Note: Key is vital to force React to replace elements instead of interpolating attributes */}
           {layers.windStructure && activeStructurePoint && isCoordsValid && activeStructurePoint.radii && hasRadii(activeStructurePoint.radii) && (
               <g key={windGroupKey} className="wind-field-layer pointer-events-none opacity-100">
                  {/* 34kt */}
@@ -440,7 +439,7 @@ const StormMap: React.FC<StormMapProps> = ({ storm }) => {
           )}
 
           {/* 4. Storm Points */}
-          {layers.points && storm.track.map((p, i) => {
+          {layers.points && storm && storm.track.map((p, i) => {
             const pointColor = getStormPointColor(p.maxWind, p.status);
             // Highlight the hovered point
             const isHovered = activeStructurePoint === p;
@@ -476,11 +475,6 @@ const StormMap: React.FC<StormMapProps> = ({ storm }) => {
                     className="pointer-events-none"
                     opacity={0.5}
                 />
-                {/* 
-                   REMOVED 'animate-ping' (CSS Transform) 
-                   Replaced with Native SVG Animation (SMIL) to pulse radius/opacity safely 
-                   without coordinate system distortion or flying artifacts.
-                */}
                 <circle 
                     cx={hoveredPoint.lon}
                     cy={-hoveredPoint.lat}

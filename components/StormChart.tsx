@@ -16,7 +16,7 @@ import {
 import { Storm } from '../types';
 
 interface StormChartProps {
-  storm: Storm;
+  storm?: Storm | null;
 }
 
 const CustomTooltip = ({ active, payload, label }: any) => {
@@ -41,6 +41,19 @@ const CustomTooltip = ({ active, payload, label }: any) => {
 };
 
 const StormChart: React.FC<StormChartProps> = ({ storm }) => {
+  if (!storm) {
+     return (
+        <div className="w-full h-[350px] bg-slate-900/50 rounded-xl border border-slate-700 p-4 shadow-lg backdrop-blur-sm flex items-center justify-center">
+            <div className="text-center text-slate-500">
+                <svg xmlns="http://www.w3.org/2000/svg" className="h-10 w-10 mx-auto mb-2 opacity-30" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 12l3-3 3 3 4-4M8 21l4-4 4 4M3 4h18M4 4h16v12a1 1 0 01-1 1H5a1 1 0 01-1-1V4z" />
+                </svg>
+                <p>Select a storm to view intensity profile</p>
+            </div>
+        </div>
+     );
+  }
+
   const data = storm.track.map(point => ({
     ...point,
     displayDate: `${point.date.slice(5)} ${point.time}`

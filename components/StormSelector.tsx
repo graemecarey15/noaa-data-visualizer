@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { Storm } from '../types';
@@ -91,6 +90,15 @@ const StormSelector: React.FC<StormSelectorProps> = ({
       s.year.toString().includes(q)
     );
   }, [storms, search]);
+
+  // Calculate counts per year for the filtered list
+  const yearCounts = useMemo(() => {
+    const counts: Record<number, number> = {};
+    for (const s of filtered) {
+        counts[s.year] = (counts[s.year] || 0) + 1;
+    }
+    return counts;
+  }, [filtered]);
 
   // Pre-select current storm when opening
   useEffect(() => {
@@ -249,12 +257,14 @@ const StormSelector: React.FC<StormSelectorProps> = ({
                         const isActive = index === highlightedIndex;
                         const isSelected = storm.id === selectedId;
                         const yearChanged = index > 0 && filtered[index-1].year !== storm.year;
-                        
+                        const count = yearCounts[storm.year];
+
                         return (
                            <React.Fragment key={storm.id}>
                                {(index === 0 || yearChanged) && (
-                                   <div className="sticky top-0 z-10 bg-slate-950/95 backdrop-blur px-3 py-1.5 text-[10px] font-bold text-slate-500 uppercase tracking-widest border-b border-slate-800/50 mt-1 mb-1">
-                                      {storm.year} Season
+                                   <div className="sticky top-0 z-10 bg-slate-950/95 backdrop-blur px-3 py-1.5 text-[10px] font-bold text-slate-500 uppercase tracking-widest border-b border-slate-800/50 mt-1 mb-1 flex justify-between items-center">
+                                      <span>{storm.year} Season</span>
+                                      <span className="opacity-60 font-mono font-normal">{count} Storms</span>
                                    </div>
                                )}
                                

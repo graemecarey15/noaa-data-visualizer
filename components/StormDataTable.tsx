@@ -1,10 +1,9 @@
-
 import React, { useState } from 'react';
 import { Storm } from '../types';
 import { STORM_STATUS_COLORS } from '../constants';
 
 interface StormDataTableProps {
-  storm: Storm;
+  storm?: Storm | null;
 }
 
 const HeaderTooltip: React.FC<{ label: string; tooltip: string; align?: 'left' | 'right' | 'center' }> = ({ label, tooltip, align = 'left' }) => (
@@ -124,11 +123,12 @@ const StormDataTable: React.FC<StormDataTableProps> = ({ storm }) => {
       <div className="p-4 border-b border-slate-700 bg-slate-800/50 flex justify-between items-center">
         <h3 className="text-slate-300 font-semibold text-sm uppercase tracking-wider">Detailed Data Log</h3>
         <div className="flex items-center gap-3 relative">
-            <span className="text-xs text-slate-500 font-mono">{storm.dataCount} Records</span>
+            <span className="text-xs text-slate-500 font-mono">{storm ? storm.dataCount : 0} Records</span>
             
             <button 
                 onClick={() => setShowMenu(!showMenu)}
-                className={`text-slate-500 hover:text-cyan-400 transition-colors p-1 rounded hover:bg-slate-700/50 ${showMenu ? 'text-cyan-400 bg-slate-700/50' : ''}`}
+                disabled={!storm}
+                className={`text-slate-500 transition-colors p-1 rounded ${storm ? 'hover:text-cyan-400 hover:bg-slate-700/50' : 'opacity-50 cursor-not-allowed'} ${showMenu ? 'text-cyan-400 bg-slate-700/50' : ''}`}
                 title="Table Settings"
             >
                 <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -237,72 +237,80 @@ const StormDataTable: React.FC<StormDataTableProps> = ({ storm }) => {
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-700/50 font-mono">
-            {storm.track.map((point, idx) => {
-              const recordBadge = getRecordLabel(point.recordIdentifier);
-              const rad34 = getMaxRad(point.radii, 'ne34');
-              const rad50 = getMaxRad(point.radii, 'ne50');
-              const rad64 = getMaxRad(point.radii, 'ne64');
-              
-              return (
-                <tr key={`${point.date}-${point.time}-${idx}`} className="hover:bg-slate-800/30 transition-colors">
-                  <td className="px-4 py-3 whitespace-nowrap text-slate-200">
-                    {point.date} <span className="text-slate-500 ml-1">{point.time}</span>
+            {!storm || storm.track.length === 0 ? (
+               <tr>
+                  <td colSpan={12} className="px-4 py-8 text-center text-slate-500 italic">
+                      No storm selected. Choose a storm to view data log.
                   </td>
-                  <td className="px-4 py-3 whitespace-nowrap">
-                    <span 
-                      className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-bold border border-slate-700 shadow-sm"
-                      style={{ 
-                        backgroundColor: `${STORM_STATUS_COLORS[point.status]}20`, 
-                        color: STORM_STATUS_COLORS[point.status],
-                        borderColor: `${STORM_STATUS_COLORS[point.status]}40`
-                      }}
-                    >
-                      {point.status}
-                    </span>
-                  </td>
-                  <td className="px-4 py-3 whitespace-nowrap text-slate-300">
-                    {point.originalLat}, {point.originalLon}
-                  </td>
-                  <td className={`px-4 py-3 whitespace-nowrap text-right font-bold ${getWindIntensityColor(point.maxWind)}`}>
-                      {point.maxWind}
-                  </td>
-                  <td className="px-4 py-3 whitespace-nowrap text-right">
-                    <span className={`${point.minPressure > 0 && point.minPressure < 980 ? 'text-rose-300 font-bold' : 'text-slate-400'}`}>
-                      {point.minPressure === 0 ? '-' : point.minPressure}
-                    </span>
-                  </td>
+               </tr>
+            ) : (
+                storm.track.map((point, idx) => {
+                  const recordBadge = getRecordLabel(point.recordIdentifier);
+                  const rad34 = getMaxRad(point.radii, 'ne34');
+                  const rad50 = getMaxRad(point.radii, 'ne50');
+                  const rad64 = getMaxRad(point.radii, 'ne64');
                   
-                  {visibleColumns.rmw && (
-                      <td className="px-4 py-3 whitespace-nowrap text-right text-slate-400">
-                        {point.rmw ? point.rmw : '-'}
+                  return (
+                    <tr key={`${point.date}-${point.time}-${idx}`} className="hover:bg-slate-800/30 transition-colors">
+                      <td className="px-4 py-3 whitespace-nowrap text-slate-200">
+                        {point.date} <span className="text-slate-500 ml-1">{point.time}</span>
                       </td>
-                  )}
-                  {visibleColumns.size34 && (
-                      <td className="px-4 py-3 whitespace-nowrap text-right text-slate-400">
-                        {rad34 > 0 ? rad34 + 'nm' : '-'}
+                      <td className="px-4 py-3 whitespace-nowrap">
+                        <span 
+                          className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-bold border border-slate-700 shadow-sm"
+                          style={{ 
+                            backgroundColor: `${STORM_STATUS_COLORS[point.status]}20`, 
+                            color: STORM_STATUS_COLORS[point.status],
+                            borderColor: `${STORM_STATUS_COLORS[point.status]}40`
+                          }}
+                        >
+                          {point.status}
+                        </span>
                       </td>
-                  )}
-                  {visibleColumns.size50 && (
-                      <td className="px-4 py-3 whitespace-nowrap text-right text-slate-400">
-                        {rad50 > 0 ? <span className="text-yellow-100/70">{rad50}nm</span> : '-'}
+                      <td className="px-4 py-3 whitespace-nowrap text-slate-300">
+                        {point.originalLat}, {point.originalLon}
                       </td>
-                  )}
-                  {visibleColumns.size64 && (
-                      <td className="px-4 py-3 whitespace-nowrap text-right text-slate-400">
-                        {rad64 > 0 ? <span className="text-rose-200/80 font-bold">{rad64}nm</span> : '-'}
+                      <td className={`px-4 py-3 whitespace-nowrap text-right font-bold ${getWindIntensityColor(point.maxWind)}`}>
+                          {point.maxWind}
                       </td>
-                  )}
+                      <td className="px-4 py-3 whitespace-nowrap text-right">
+                        <span className={`${point.minPressure > 0 && point.minPressure < 980 ? 'text-rose-300 font-bold' : 'text-slate-400'}`}>
+                          {point.minPressure === 0 ? '-' : point.minPressure}
+                        </span>
+                      </td>
+                      
+                      {visibleColumns.rmw && (
+                          <td className="px-4 py-3 whitespace-nowrap text-right text-slate-400">
+                            {point.rmw ? point.rmw : '-'}
+                          </td>
+                      )}
+                      {visibleColumns.size34 && (
+                          <td className="px-4 py-3 whitespace-nowrap text-right text-slate-400">
+                            {rad34 > 0 ? rad34 + 'nm' : '-'}
+                          </td>
+                      )}
+                      {visibleColumns.size50 && (
+                          <td className="px-4 py-3 whitespace-nowrap text-right text-slate-400">
+                            {rad50 > 0 ? <span className="text-yellow-100/70">{rad50}nm</span> : '-'}
+                          </td>
+                      )}
+                      {visibleColumns.size64 && (
+                          <td className="px-4 py-3 whitespace-nowrap text-right text-slate-400">
+                            {rad64 > 0 ? <span className="text-rose-200/80 font-bold">{rad64}nm</span> : '-'}
+                          </td>
+                      )}
 
-                  <td className="px-4 py-3 whitespace-nowrap text-right h-10">
-                    {recordBadge && (
-                       <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold tracking-wide ${recordBadge.color}`}>
-                         {recordBadge.label}
-                       </span>
-                    )}
-                  </td>
-                </tr>
-              );
-            })}
+                      <td className="px-4 py-3 whitespace-nowrap text-right h-10">
+                        {recordBadge && (
+                           <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold tracking-wide ${recordBadge.color}`}>
+                             {recordBadge.label}
+                           </span>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })
+            )}
           </tbody>
         </table>
       </div>

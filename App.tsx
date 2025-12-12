@@ -39,9 +39,11 @@ const App: React.FC = () => {
     const initApp = () => {
       try {
         // A. Load Defaults
-        const sampleParsed = parseHurdat2(SAMPLE_HURDAT_DATA);
-        const preloadedParsed = parseHurdat2(PRELOADED_SEASON_DATA);
-        setDefaultStorms([...sampleParsed, ...preloadedParsed]);
+        // Temporarily disabled preloaded data
+        // const sampleParsed = parseHurdat2(SAMPLE_HURDAT_DATA);
+        // const preloadedParsed = parseHurdat2(PRELOADED_SEASON_DATA);
+        // setDefaultStorms([...sampleParsed, ...preloadedParsed]);
+        setDefaultStorms([]);
 
         // B. Load Persisted User Storms
         const savedStorms = localStorage.getItem('hurdat_user_storms');
@@ -363,11 +365,11 @@ const App: React.FC = () => {
                           disabled={preset.disabled}
                           title={preset.title}
                           className={`px-3 py-1 text-xs font-bold rounded transition-colors whitespace-nowrap h-full flex items-center ${
-                            activePreset === preset.value 
-                                ? 'bg-cyan-600 text-white shadow-sm' 
-                                : preset.disabled 
-                                  ? 'text-slate-600 cursor-not-allowed opacity-50 bg-slate-800/50'
-                                  : 'text-slate-400 hover:text-cyan-400 hover:bg-slate-700'
+                             preset.disabled 
+                                ? 'text-slate-600 cursor-not-allowed opacity-50 bg-slate-800/50'
+                                : activePreset === preset.value 
+                                   ? 'bg-cyan-600 text-white shadow-sm' 
+                                   : 'text-slate-400 hover:text-cyan-400 hover:bg-slate-700'
                           }`}
                       >
                           {preset.label}
@@ -379,29 +381,24 @@ const App: React.FC = () => {
           </div>
         </div>
 
-        {selectedStorm ? (
-          <div className="space-y-10 animate-fade-in">
-            {/* Top Row: Summary Stats */}
-            <StormSummary storm={selectedStorm} />
+        <div className="space-y-10 animate-fade-in">
+          {/* Top Row: Summary Stats */}
+          <StormSummary storm={selectedStorm} />
 
-            {/* Middle Row: Map & Chart */}
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-              <div className="space-y-2">
-                <StormMap storm={selectedStorm} />
-              </div>
-              <div className="space-y-2">
-                <StormChart storm={selectedStorm} />
-              </div>
+          {/* Middle Row: Map & Chart (Stacked Vertically now) */}
+          <div className="flex flex-col gap-6">
+            <div className="space-y-2 w-full">
+              <StormMap storm={selectedStorm} />
             </div>
+            <div className="space-y-2 w-full">
+              <StormChart storm={selectedStorm} />
+            </div>
+          </div>
 
-            {/* Bottom Row: Data Table */}
-            <StormDataTable storm={selectedStorm} />
-          </div>
-        ) : (
-          <div className="flex flex-col items-center justify-center h-64 text-slate-500 border-2 border-dashed border-slate-800 rounded-xl">
-             <p>Select a storm or adjust filters to view data</p>
-          </div>
-        )}
+          {/* Bottom Row: Data Table */}
+          <StormDataTable storm={selectedStorm} />
+        </div>
+        
       </main>
 
       {/* Import Modal */}
