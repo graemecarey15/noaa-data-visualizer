@@ -3,9 +3,10 @@ import { Storm } from '../types';
 
 interface StormSummaryProps {
   storm?: Storm | null;
+  identityColor?: string;
 }
 
-const StormSummary: React.FC<StormSummaryProps> = ({ storm }) => {
+const StormSummary: React.FC<StormSummaryProps> = ({ storm, identityColor }) => {
   const stats = useMemo(() => {
     if (!storm || !storm.track || storm.track.length === 0) {
       return {
@@ -52,12 +53,16 @@ const StormSummary: React.FC<StormSummaryProps> = ({ storm }) => {
     };
   }, [storm]);
 
+  const headerColor = identityColor || '#94a3b8';
+
   return (
     <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
       {/* Peak Intensity Card */}
       <div className="bg-slate-900/50 border border-slate-700 p-4 rounded-xl shadow-lg backdrop-blur-sm flex flex-col justify-between hover:border-slate-600 transition-colors">
         <div>
-          <p className="text-slate-500 text-xs font-bold uppercase tracking-wider mb-1">Peak Intensity</p>
+          <p className="text-xs font-bold uppercase tracking-wider mb-1" style={{ color: headerColor }}>
+             Peak Intensity
+          </p>
           <div className="flex items-baseline gap-2">
             <h4 className={`text-2xl font-bold ${stats.peakWind > 0 ? stats.catColor : 'text-slate-600'}`}>
                 {stats.peakWind > 0 ? stats.peakWind : '-'} <span className="text-sm text-slate-400 font-normal">kts</span>
@@ -71,7 +76,7 @@ const StormSummary: React.FC<StormSummaryProps> = ({ storm }) => {
 
       {/* Min Pressure Card */}
       <div className="bg-slate-900/50 border border-slate-700 p-4 rounded-xl shadow-lg backdrop-blur-sm flex flex-col justify-between hover:border-slate-600 transition-colors">
-        <p className="text-slate-500 text-xs font-bold uppercase tracking-wider mb-1">Min Pressure</p>
+        <p className="text-xs font-bold uppercase tracking-wider mb-1" style={{ color: headerColor }}>Min Pressure</p>
         <div className="flex items-baseline gap-2">
           <h4 className={`text-2xl font-bold ${stats.minPressure > 0 ? 'text-rose-400' : 'text-slate-600'}`}>
               {stats.minPressure > 0 ? stats.minPressure : '-'} <span className="text-sm text-slate-400 font-normal">mb</span>
@@ -82,7 +87,7 @@ const StormSummary: React.FC<StormSummaryProps> = ({ storm }) => {
 
       {/* Landfalls Card */}
       <div className="bg-slate-900/50 border border-slate-700 p-4 rounded-xl shadow-lg backdrop-blur-sm flex flex-col justify-between hover:border-slate-600 transition-colors">
-        <p className="text-slate-500 text-xs font-bold uppercase tracking-wider mb-1">Landfalls</p>
+        <p className="text-xs font-bold uppercase tracking-wider mb-1" style={{ color: headerColor }}>Landfalls</p>
         <div className="flex items-baseline gap-2">
           <h4 className={`text-2xl font-bold ${stats.landfalls.length > 0 ? 'text-emerald-400' : 'text-slate-600'}`}>{stats.landfalls.length}</h4>
         </div>
@@ -101,7 +106,7 @@ const StormSummary: React.FC<StormSummaryProps> = ({ storm }) => {
 
       {/* Duration Card */}
       <div className="bg-slate-900/50 border border-slate-700 p-4 rounded-xl shadow-lg backdrop-blur-sm flex flex-col justify-between hover:border-slate-600 transition-colors">
-        <p className="text-slate-500 text-xs font-bold uppercase tracking-wider mb-1">Duration</p>
+        <p className="text-xs font-bold uppercase tracking-wider mb-1" style={{ color: headerColor }}>Duration</p>
         <div className="flex items-baseline gap-2">
           <h4 className={`text-2xl font-bold ${stats.durationDays > 0 ? 'text-blue-400' : 'text-slate-600'}`}>
               {stats.durationDays > 0 ? stats.durationDays : '-'} <span className="text-sm text-slate-400 font-normal">days</span>

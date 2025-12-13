@@ -6,12 +6,13 @@ interface StormMapProps {
   storms: Storm[]; // List of all active storms to render
   focusedStormId?: string; // The specific storm selected for detailed inspection
   onStormFocus?: (id: string) => void;
+  stormColors?: Record<string, string>; // ID -> Hex Color
 }
 
 // Lightweight World Map GeoJSON URL (Reliable source)
 const GEOJSON_URL = "https://raw.githubusercontent.com/holtzy/D3-graph-gallery/master/DATA/world.geojson";
 
-const StormMap: React.FC<StormMapProps> = ({ storms, focusedStormId, onStormFocus }) => {
+const StormMap: React.FC<StormMapProps> = ({ storms, focusedStormId, onStormFocus, stormColors }) => {
   const [worldData, setWorldData] = useState<any>(null);
   const [hoveredPoint, setHoveredPoint] = useState<StormDataPoint | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -284,6 +285,23 @@ const StormMap: React.FC<StormMapProps> = ({ storms, focusedStormId, onStormFocu
 
   // Use a unique key for the wind group to force re-render on hover change
   const windGroupKey = activeStructurePoint ? `wind-${activeStructurePoint.datetime}-${activeStructurePoint.lat}-${activeStructurePoint.lon}` : 'wind-none';
+  
+  // Determine color for wind field
+  // If we are hovering a point belonging to a storm, we need that storm's identity color.
+  // We don't easily know which storm the hovered point belongs to unless we track it.
+  // We can pass the `stormId` in the hover state or just use the focused color if the hovered point is part of focused storm.
+  // For simplicity, let's assume active structure point belongs to the focused storm or find the storm it belongs to.
+  // Since we only hover points of rendered storms, let's find the storm.
+  const activeStructureStormId = useMemo(() => {
+      if (!hoveredPoint) return null;
+      // Reverse lookup is expensive, but we only have 7 max viewable storms
+      for (const s of storms) {
+          if (s.track.includes(hoveredPoint)) return s.id;
+      }
+      return null;
+  }, [hoveredPoint, storms]);
+  
+  const windFieldColor = activeStructureStormId && stormColors ? stormColors[activeStructureStormId] : '#10b981';
 
   return (
     <div className="w-full h-[500px] bg-slate-900/50 rounded-xl border border-slate-700 shadow-lg backdrop-blur-sm relative overflow-hidden flex flex-col select-none">
@@ -425,6 +443,7 @@ const StormMap: React.FC<StormMapProps> = ({ storms, focusedStormId, onStormFocu
           {/* 2. Storm Track Lines (Draw All) */}
           {layers.track && renderSortedStorms.map(storm => {
              const isFocused = storm.id === focusedStormId;
+             const identityColor = stormColors ? (stormColors[storm.id] || '#94a3b8') : '#94a3b8';
              
              return (
                 <g 
@@ -444,15 +463,15 @@ const StormMap: React.FC<StormMapProps> = ({ storms, focusedStormId, onStormFocu
                         strokeWidth={visiblePointRadius * 2} 
                         className="pointer-events-auto"
                     />
-                    {/* Visible Line */}
+                    {/* Visible Line - Uses Identity Color */}
                     <polyline
                         points={storm.track.map(p => `${p.lon},${-p.lat}`).join(" ")}
                         fill="none"
-                        stroke={isFocused ? "#94a3b8" : "#475569"} 
+                        stroke={identityColor} 
                         strokeWidth={isFocused ? visiblePointRadius * 0.5 : visiblePointRadius * 0.3}
-                        strokeDasharray={isFocused ? `${visiblePointRadius}, ${visiblePointRadius}` : "0"}
-                        opacity={isFocused ? 0.8 : 0.4}
-                        className={`transition-all duration-300 ${!isFocused ? 'group-hover:stroke-slate-400 group-hover:opacity-80' : ''}`}
+                        strokeDasharray={isFocused ? "0" : "2,2"} // Solid if focused, dashed if not
+                        opacity={isFocused ? 0.9 : 0.5}
+                        className={`transition-all duration-300 ${!isFocused ? 'group-hover:opacity-80' : ''}`}
                     />
                 </g>
              );
@@ -461,15 +480,18 @@ const StormMap: React.FC<StormMapProps> = ({ storms, focusedStormId, onStormFocu
           {/* 3. Wind Field Layer (Dynamic: Hovered Only) */}
           {layers.windStructure && activeStructurePoint && isCoordsValid && activeStructurePoint.radii && hasRadii(activeStructurePoint.radii) && (
               <g key={windGroupKey} className="wind-field-layer pointer-events-none opacity-100">
+                 {/* Uses Identity Color with Decreasing Opacity for larger radii */}
                  {getMaxRad(activeStructurePoint.radii, '34') > 0 && (
                      <ellipse 
                         cx={cx}
                         cy={cy}
                         rx={nmToDegLon(getMaxRad(activeStructurePoint.radii, '34'), activeStructurePoint.lat)}
                         ry={nmToDegLat(getMaxRad(activeStructurePoint.radii, '34'))}
-                        fill="rgba(16, 185, 129, 0.2)"
-                        stroke="rgba(16, 185, 129, 0.5)"
-                        strokeWidth={visiblePointRadius * 0.2}
+                        fill={windFieldColor}
+                        fillOpacity={0.1}
+                        stroke={windFieldColor}
+                        strokeOpacity={0.3}
+                        strokeWidth={visiblePointRadius * 0.1}
                      />
                  )}
                  {getMaxRad(activeStructurePoint.radii, '50') > 0 && (
@@ -478,9 +500,11 @@ const StormMap: React.FC<StormMapProps> = ({ storms, focusedStormId, onStormFocu
                         cy={cy}
                         rx={nmToDegLon(getMaxRad(activeStructurePoint.radii, '50'), activeStructurePoint.lat)}
                         ry={nmToDegLat(getMaxRad(activeStructurePoint.radii, '50'))}
-                        fill="rgba(234, 179, 8, 0.2)"
-                        stroke="rgba(234, 179, 8, 0.5)"
-                        strokeWidth={visiblePointRadius * 0.2}
+                        fill={windFieldColor}
+                        fillOpacity={0.15}
+                        stroke={windFieldColor}
+                        strokeOpacity={0.4}
+                        strokeWidth={visiblePointRadius * 0.1}
                      />
                  )}
                  {getMaxRad(activeStructurePoint.radii, '64') > 0 && (
@@ -489,15 +513,17 @@ const StormMap: React.FC<StormMapProps> = ({ storms, focusedStormId, onStormFocu
                         cy={cy}
                         rx={nmToDegLon(getMaxRad(activeStructurePoint.radii, '64'), activeStructurePoint.lat)}
                         ry={nmToDegLat(getMaxRad(activeStructurePoint.radii, '64'))}
-                        fill="rgba(244, 63, 94, 0.2)"
-                        stroke="rgba(244, 63, 94, 0.5)"
-                        strokeWidth={visiblePointRadius * 0.2}
+                        fill={windFieldColor}
+                        fillOpacity={0.25}
+                        stroke={windFieldColor}
+                        strokeOpacity={0.6}
+                        strokeWidth={visiblePointRadius * 0.1}
                      />
                  )}
               </g>
           )}
 
-          {/* 4. Storm Points */}
+          {/* 4. Storm Points (Intensity Coded) */}
           {layers.points && renderSortedStorms.map(storm => {
              const isFocused = storm.id === focusedStormId;
              
@@ -517,9 +543,9 @@ const StormMap: React.FC<StormMapProps> = ({ storms, focusedStormId, onStormFocu
                                 key={`${storm.id}-${i}`}
                                 cx={p.lon}
                                 cy={-p.lat}
-                                r={visiblePointRadius * 0.4}
+                                r={visiblePointRadius * 0.3} // Smaller background points
                                 fill={getStormPointColor(p.maxWind, p.status)}
-                                opacity={0.4}
+                                opacity={0.5}
                                 className="hover:opacity-100 transition-opacity"
                             />
                          ))}
@@ -537,10 +563,10 @@ const StormMap: React.FC<StormMapProps> = ({ storms, focusedStormId, onStormFocu
                     key={`${storm.id}-${i}`}
                     cx={p.lon}
                     cy={-p.lat}
-                    r={p.recordIdentifier === 'L' ? visiblePointRadius * 1.5 : visiblePointRadius}
+                    r={p.recordIdentifier === 'L' ? visiblePointRadius * 1.2 : visiblePointRadius * 0.8}
                     fill={pointColor}
                     stroke={isHovered ? '#fff' : (p.recordIdentifier === 'L' ? '#10b981' : 'transparent')}
-                    strokeWidth={isHovered ? visiblePointRadius * 0.4 : visiblePointRadius * 0.3}
+                    strokeWidth={isHovered ? visiblePointRadius * 0.3 : visiblePointRadius * 0.2}
                     strokeOpacity={isHovered ? 0.8 : 1}
                     className="hover:opacity-100 cursor-pointer hover:stroke-white/50"
                     onMouseEnter={() => setHoveredPoint(p)}
@@ -560,26 +586,26 @@ const StormMap: React.FC<StormMapProps> = ({ storms, focusedStormId, onStormFocu
                 <circle 
                     cx={hoveredPoint.lon}
                     cy={-hoveredPoint.lat}
-                    r={visiblePointRadius * 1.8}
+                    r={visiblePointRadius * 1.5}
                     fill="none"
                     stroke="white"
-                    strokeWidth={visiblePointRadius * 0.3}
+                    strokeWidth={visiblePointRadius * 0.2}
                     className="pointer-events-none"
                     opacity={0.5}
                 />
                 <circle 
                     cx={hoveredPoint.lon}
                     cy={-hoveredPoint.lat}
-                    r={visiblePointRadius * 2}
+                    r={visiblePointRadius * 1.8}
                     fill="none"
                     stroke="white"
-                    strokeWidth={visiblePointRadius * 0.2}
+                    strokeWidth={visiblePointRadius * 0.15}
                     opacity="0.8"
                     className="pointer-events-none"
                 >
                     <animate 
                        attributeName="r" 
-                       values={`${visiblePointRadius * 1.8};${visiblePointRadius * 2.5};${visiblePointRadius * 1.8}`} 
+                       values={`${visiblePointRadius * 1.5};${visiblePointRadius * 2.2};${visiblePointRadius * 1.5}`} 
                        dur="2s" 
                        repeatCount="indefinite" 
                     />

@@ -17,6 +17,7 @@ import { Storm } from '../types';
 
 interface StormChartProps {
   storm?: Storm | null;
+  color?: string; // Identity Color
 }
 
 const CustomTooltip = ({ active, payload, label }: any) => {
@@ -25,8 +26,8 @@ const CustomTooltip = ({ active, payload, label }: any) => {
     return (
       <div className="bg-slate-800 border border-slate-600 p-3 rounded shadow-xl text-xs z-50">
         <p className="font-bold text-slate-200 mb-1">{label}</p>
-        <p className="text-cyan-400">Wind: {payload[0].value} kts</p>
-        {payload[1] && <p className="text-rose-400">Pressure: {payload[1].value} mb</p>}
+        <p style={{ color: payload[0].stroke }}>Wind: {payload[0].value} kts</p>
+        {payload[1] && <p className="text-slate-400">Pressure: {payload[1].value} mb</p>}
         <div className="mt-2 pt-2 border-t border-slate-700">
           <p className="text-slate-400">Status: {data.status}</p>
           {data.recordIdentifier && (
@@ -40,7 +41,7 @@ const CustomTooltip = ({ active, payload, label }: any) => {
   return null;
 };
 
-const StormChart: React.FC<StormChartProps> = ({ storm }) => {
+const StormChart: React.FC<StormChartProps> = ({ storm, color = '#22d3ee' }) => {
   if (!storm) {
      return (
         <div className="w-full h-[350px] bg-slate-900/50 rounded-xl border border-slate-700 p-4 shadow-lg backdrop-blur-sm flex items-center justify-center">
@@ -61,13 +62,16 @@ const StormChart: React.FC<StormChartProps> = ({ storm }) => {
 
   return (
     <div className="w-full h-[350px] bg-slate-900/50 rounded-xl border border-slate-700 p-4 shadow-lg backdrop-blur-sm">
-      <h3 className="text-slate-300 font-semibold mb-4 text-sm uppercase tracking-wider">Intensity Profile</h3>
+      <h3 className="text-slate-300 font-semibold mb-4 text-sm uppercase tracking-wider flex items-center gap-2">
+         <span className="w-2 h-2 rounded-full" style={{ backgroundColor: color }}></span>
+         Intensity Profile
+      </h3>
       <ResponsiveContainer width="100%" height="100%">
         <ComposedChart data={data} margin={{ top: 10, right: 30, left: 10, bottom: 20 }}>
           <defs>
             <linearGradient id="colorWind" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="5%" stopColor="#22d3ee" stopOpacity={0.8}/>
-              <stop offset="95%" stopColor="#22d3ee" stopOpacity={0}/>
+              <stop offset="5%" stopColor={color} stopOpacity={0.8}/>
+              <stop offset="95%" stopColor={color} stopOpacity={0}/>
             </linearGradient>
           </defs>
           <CartesianGrid strokeDasharray="3 3" stroke="#334155" vertical={false} />
@@ -82,23 +86,22 @@ const StormChart: React.FC<StormChartProps> = ({ storm }) => {
           
           <YAxis 
             yAxisId="left" 
-            stroke="#22d3ee" 
+            stroke={color} 
             tick={{fontSize: 10}} 
             domain={[0, 'auto']}
-            label={{ value: 'Wind (kts)', angle: -90, position: 'insideLeft', fill: '#22d3ee', fontSize: 10 }}
+            label={{ value: 'Wind (kts)', angle: -90, position: 'insideLeft', fill: color, fontSize: 10 }}
           />
           
           <YAxis 
             yAxisId="right" 
             orientation="right" 
-            stroke="#f43f5e" 
+            stroke="#94a3b8" 
             domain={['auto', 'auto']} 
             tick={{fontSize: 10}}
-            label={{ value: 'Pressure (mb)', angle: 90, position: 'insideRight', fill: '#f43f5e', fontSize: 10 }}
+            label={{ value: 'Pressure (mb)', angle: 90, position: 'insideRight', fill: '#94a3b8', fontSize: 10 }}
           />
           
           <Tooltip content={<CustomTooltip />} />
-          {/* Increased paddingTop to 40px for distinct separation from X-Axis */}
           <Legend wrapperStyle={{ fontSize: '12px', paddingTop: '40px' }} />
           
           {/* Saffir-Simpson Category Reference Lines */}
@@ -117,7 +120,7 @@ const StormChart: React.FC<StormChartProps> = ({ storm }) => {
             type="monotone" 
             dataKey="maxWind" 
             name="Max Wind (knots)" 
-            stroke="#22d3ee" 
+            stroke={color} 
             fillOpacity={1} 
             fill="url(#colorWind)" 
           />
@@ -127,8 +130,9 @@ const StormChart: React.FC<StormChartProps> = ({ storm }) => {
             type="monotone" 
             dataKey="minPressure" 
             name="Min Pressure (mb)" 
-            stroke="#f43f5e" 
-            strokeWidth={2}
+            stroke="#94a3b8" 
+            strokeWidth={1}
+            strokeDasharray="5 5"
             dot={false} 
           />
         </ComposedChart>

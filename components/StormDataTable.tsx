@@ -6,6 +6,7 @@ interface StormDataTableProps {
   activeStorms: Storm[];
   focusedStormId: string;
   onFocus: (id: string) => void;
+  stormColors?: Record<string, string>;
 }
 
 const HeaderTooltip: React.FC<{ label: string; tooltip: string; align?: 'left' | 'right' | 'center' }> = ({ label, tooltip, align = 'left' }) => (
@@ -28,7 +29,7 @@ const HeaderTooltip: React.FC<{ label: string; tooltip: string; align?: 'left' |
   </th>
 );
 
-const StormDataTable: React.FC<StormDataTableProps> = ({ activeStorms, focusedStormId, onFocus }) => {
+const StormDataTable: React.FC<StormDataTableProps> = ({ activeStorms, focusedStormId, onFocus, stormColors }) => {
   const [showMenu, setShowMenu] = useState(false);
   const [visibleColumns, setVisibleColumns] = useState({
      rmw: true,
@@ -132,6 +133,7 @@ const StormDataTable: React.FC<StormDataTableProps> = ({ activeStorms, focusedSt
          ) : (
              activeStorms.map(s => {
                  const isActive = s.id === focusedStormId;
+                 const identityColor = stormColors ? (stormColors[s.id] || '#94a3b8') : '#94a3b8';
                  
                  // --- Metadata Calculation for Tab ---
                  const maxWind = s.track.length > 0 ? Math.max(...s.track.map(t => t.maxWind)) : 0;
@@ -156,16 +158,20 @@ const StormDataTable: React.FC<StormDataTableProps> = ({ activeStorms, focusedSt
                         className={`
                            px-4 py-2 text-xs font-bold uppercase tracking-wider transition-all border-r border-slate-700/50 whitespace-nowrap min-w-[120px] text-center
                            ${isActive 
-                               ? 'bg-slate-700/80 text-cyan-400 border-b-2 border-b-cyan-400 shadow-[inset_0_-2px_4px_rgba(0,0,0,0.2)]' 
-                               : 'text-slate-500 hover:text-slate-300 hover:bg-slate-700/30 border-b-2 border-b-transparent'}
+                               ? 'bg-slate-700/80 shadow-[inset_0_-2px_4px_rgba(0,0,0,0.2)]' 
+                               : 'text-slate-500 hover:text-slate-300 hover:bg-slate-700/30'}
                         `}
+                        style={{
+                           borderBottom: isActive ? `2px solid ${identityColor}` : '2px solid transparent',
+                           color: isActive ? identityColor : undefined
+                        }}
                      >
                         <div className="flex flex-col items-center leading-snug">
                            <div className="flex items-center gap-1.5">
                               <span className="text-sm font-extrabold">{s.name}</span>
-                              {peakStatus && <span className={`px-1 rounded text-[9px] ${isActive ? 'bg-cyan-900/50 text-cyan-200' : 'bg-slate-800 text-slate-400 border border-slate-700'}`}>{peakStatus}</span>}
+                              {peakStatus && <span className={`px-1 rounded text-[9px] ${isActive ? 'bg-slate-800/80 border border-slate-600' : 'bg-slate-800 text-slate-400 border border-slate-700'}`}>{peakStatus}</span>}
                            </div>
-                           <div className="text-[10px] font-medium opacity-70">
+                           <div className={`text-[10px] font-medium ${isActive ? 'opacity-90' : 'opacity-70'}`}>
                               {s.year} - {catLabel}
                            </div>
                         </div>
